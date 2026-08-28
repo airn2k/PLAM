@@ -1,0 +1,14 @@
+matplotlib
+geopandas
+numba=0.65.1
+cdsapi 
+contextily
+optuna
+xarray
+scipy
+joblib
+rasterio
+bmi_topography
+openpyxl
+cfgrib
+gdal
