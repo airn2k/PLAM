@@ -1,4 +1,4 @@
-cff-version: 1.2.0
+cff-version: 1.1.0
 message: "If you use this software, please cite it as below."
 authors:
 - family-names: Kabiri
@@ -7,7 +7,6 @@ authors:
 - family-names: Curran
   given-names: Tom
   orcid: https://orcid.org/0000-0003-1878-2306
-
 title:airn2k/PLAM: Parallelised Lagrangian Atmospheric Model (PLAM), Version 0.0.1
 version: v0.0.1
 date-released: 2026-08-28
