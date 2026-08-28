@@ -1,13 +1,27 @@
-cff-version: 1.1.0
-message: "If you use this software, please cite it as below."
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: Parallelised Lagrangian Atmospheric Model (PLAM)
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
 authors:
-- family-names: Kabiri
-  given-names: Shayan
-  orcid: https://orcid.org/0000-0003-3231-5843
-- family-names: Curran
-  given-names: Tom
-  orcid: https://orcid.org/0000-0003-1878-2306
-title:airn2k/PLAM: Parallelised Lagrangian Atmospheric Model (PLAM), Version 0.0.1
-version: v0.0.1
-date-released: 2026-08-28
-                                
+  - given-names: Shayan
+    family-names: Kabiri
+    email: shayan.kabiri@ucd.ie
+    affiliation: University College Dublin
+    orcid: 'https://orcid.org/0000-0003-3231-5843'
+  - given-names: Thomas P.
+    family-names: Curran
+    email: tom.curran@ucd.ie
+    affiliation: University College Dublin
+    orcid: 'https://orcid.org/0000-0003-1878-2306'
+repository-code: 'https://github.com/airn2k/PLAM/releases'
+keywords:
+  - air pollution
+  - environmental modelling
+  - parallel computing
+  - ammonia
+license: GPL-3.0-or-later
