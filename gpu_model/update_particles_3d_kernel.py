@@ -15,14 +15,14 @@ def update_particles_3d_kernel(
     u_ref,
     v_ref,
     z_ref,       # Reference height for wind (typically 10m)
-    z0,          # Roughness length
+    z0_map,          # Roughness length
     blh,         # Boundary layer height
     Kxy,
     Kz_low,      # Kz for near-surface (0-100m)
     Kz_mid,      # Kz for mid-level (100-500m) 
     Kz_high,     # Kz for upper level (>500m)
     dt,  # scalars
-    P_dep_surf,  # Deposition probability for NH3
+    v_d_map,  # v_d_map (deposition velocity map)
     P_dep_nh4,   # Deposition probability for NH4+
     P_conversion,  # NH3→NH4+ conversion probability
     P_wet_dep,   # Wet deposition probability
@@ -58,7 +58,8 @@ def update_particles_3d_kernel(
     oro_z_top,    # orographic lifting height ceiling AGL (m)
     sshf,         # surface sensible heat flux (W/m²)
     release_vz,         # (n_part,) float32 initial vertical velocity for newly emitted particles
-    seasonal_factor_step  # (n_part,) float32 seasonal factor for each particle
+    seasonal_factor_step,  # (n_part,) float32 seasonal factor for each particle
+    temperature_celsius  # (n_part,) float32 temperature for each particle
 ):
     j = cuda.blockIdx.x
     k = cuda.threadIdx.x + cuda.blockDim.x * cuda.blockIdx.y
@@ -78,7 +79,7 @@ def update_particles_3d_kernel(
     local_ground_z = 0.0
     if 0 <= ix_dem < dem_nx and 0 <= iy_dem < dem_ny:
         local_ground_z = float(dem[ix_dem, iy_dem])
-
+    z0  = float(z0_map[ix_dem, iy_dem]) if 0 <= ix_dem < dem_nx and 0 <= iy_dem < dem_ny else 0.0
     particle_height_agl = float(z[idx, k] - local_ground_z)
     particle_height_agl = max(particle_height_agl, z0 * 1.01)   
 
@@ -230,6 +231,14 @@ def update_particles_3d_kernel(
     
     if DEPOSITION_ENABLED == 1:
         if 0 <= ix_dem < dem_nx and 0 <= iy_dem < dem_ny:
+            v_d = float(v_d_map[ix_dem, iy_dem]) if 0 <= ix_dem < dem_nx and 0 <= iy_dem < dem_ny else 0.0
+            v_d_temp = float(v_d * (1.0 + 0.04 * (temperature_celsius - 15.0)))
+            v_d_temp = max(0.01, min(0.05, v_d_temp))
+            H_raw = float(2*math.sqrt(Kz_low * dt))  # rough estimate of surface layer height
+            H_min = float(0.2*blh)
+            H_max = float(120.0)
+            H = float(min(H_max, max(H_min, H_raw))*H_FACTOR)
+            P_dep_surf = np.float32(min(1.0, (v_d_temp * dt)/H))
             z_dem = dem[ix_dem, iy_dem]
             if z[idx, k] < z_dem:
                 P_dep = P_dep_surf if particle_type[idx, k] == 0 else P_dep_nh4

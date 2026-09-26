@@ -1,7 +1,7 @@
 # Copy to params.py and edit the values as needed
 import numpy as np
 import os
-CHANNELING_ALPHA = 0.1
+CHANNELING_ALPHA = 0.5
 CHANNELING_CROSS_SLOPE_MIN = 0
 CHANNELING_SLOPE_REF = 0.05
 CHANNELING_Z_TOP = 500.0

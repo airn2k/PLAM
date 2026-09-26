@@ -319,31 +319,26 @@ corine_to_v_d = {
     33: "open_water_rock", 34: "open_water_rock"
 }
 
-# Calculate average v_d for the whole area, weighted by land cover type based on corine_to_v_d
-v_d_avg = 0.0
-total_area = 0.0
+# Calculate a v_d map for the study area based on land cover types
+v_d_map = np.zeros_like(study_area_corine, dtype=float)
 for corine_code, area_fraction in study_area_corine.items():
     land_cover_type = corine_to_v_d.get(corine_code)
     if land_cover_type is not None:
-        v_d_avg += v_d_table[land_cover_type] * area_fraction
-        total_area += area_fraction
-if total_area > 0:
-    v_d_avg /= total_area
+        v_d_map[study_area_corine == corine_code] = v_d_table[land_cover_type]
 
-# Calculate roughness length for the whole area, weighted by land cover type based on corine_to_v_d
-z0_avg = 0.0
-total_area = 0.0
+# Calculate a z0 map for the study area based on land cover types
+z0_map = np.zeros_like(study_area_corine, dtype=float)
 for corine_code, area_fraction in study_area_corine.items():
     land_cover_type = corine_to_v_d.get(corine_code)
     if land_cover_type is not None:
-        z0_avg += z0_table[land_cover_type] * area_fraction
-        total_area += area_fraction
-if total_area > 0:
-    z0_avg /= total_area
-
-# Create a v_d table for different land cover types
-v_d = v_d_avg
-z0 = z0_avg 
+        z0_map[study_area_corine == corine_code] = z0_table[land_cover_type]
+nx = int((bounds[2] - bounds[0]) // GRID_RES)
+ny = int((bounds[3] - bounds[1]) // GRID_RES)
+# Reproject v_d and z0 maps to study's CRS and spatial resolution
+v_d_map = scipy.ndimage.zoom(v_d_map, (ny / v_d_map.shape[0], nx / v_d_map.shape[1]), order=1)
+z0_map = scipy.ndimage.zoom(z0_map, (ny / z0_map.shape[0], nx / z0_map.shape[1]), order=1)
+v_d_map = v_d_map[::-1, :].T.copy()  # shape (nx, ny): [ix_east, iy_north]
+z0_map = z0_map[::-1, :].T.copy()  # shape (nx, ny): [ix_east, iy_north]
 
 
 if FLAT_SITE == 0:
@@ -382,8 +377,6 @@ if FLAT_SITE == 0:
 else:
     dem_path = None
     # Generate a flat DEM at 0 m elevation for flat site with the correct shape and transform
-    nx = int((bounds[2] - bounds[0]) // GRID_RES)
-    ny = int((bounds[3] - bounds[1]) // GRID_RES)
     dem_array = np.zeros((ny, nx), dtype=np.float32)
     dem_transform = Affine.translation(bounds[0], bounds[3]) * Affine.scale(GRID_RES, -GRID_RES)
 
@@ -961,14 +954,11 @@ for step_counter in range(total_steps):
     temp_celsius = float(temp_fine[step_counter])
     if DEPOSITION_ENABLED:
         # Dry deposition is taken and adapted from Webster, H.N. and D.J. Thomson, Dry deposition modelling in a Lagrangian dispersion model. International Journal of Environment and Pollution, 2011. 47(1-4): p. 1–9. The term f was ommited to allow for pre-computation of deposition. 
-        v_d_temp = v_d * (1.0 + 0.04 * (temp_celsius - 15.0))
-        v_d_temp = max(0.01, min(0.05, v_d_temp))
         v_d_nh4_temp = v_d_nh4
         H_raw = 2*np.sqrt(Kz_low * dt)  # rough estimate of surface layer height
         H_min = 0.2*blh_fine[step_counter]
         H_max = 120.0
         H = min(H_max, max(H_min, H_raw))*H_FACTOR
-        P_dep_surf_array[step_counter] = np.float32(min(1.0, (v_d_temp * dt)/H))
         P_dep_nh4_array[step_counter] = np.float32(min(1.0, (v_d_nh4_temp * dt)/H))
 
         # Wet deposition is a simple first order differential equation, with a constant scavenging coefficient based on rain intensity derived from the classic Jylhä, ‘Empirical Scavenging Coefficients of Radioactive Substances Released from Chernobyl’. ADMS uses the same approach
@@ -1115,7 +1105,6 @@ sampler_avg = 0.0
 
 # Parameters for height-dependent wind
 z_ref = 10.0
-z0_global = z0  # Store in local variable for reuse
 
 output_dir = os.environ.get("OUTPUT_DIR")
 if output_dir:
@@ -1135,6 +1124,8 @@ monthly_surface_sum = {}
 monthly_surface_counts = {}
 monthly_surface_sum_depo = {} if DEPOSITION_ENABLED else None
 hourly_agl_collection = [] if HOURLY_MAPS == 1 else None
+d_v_d_map = cuda.to_device(v_d_map.astype(np.float16))
+d_z0_map = cuda.to_device(z0_map.astype(np.float16))
 
 for global_step in range(total_steps):
     start = time.time()
@@ -1192,6 +1183,7 @@ for global_step in range(total_steps):
     z_cap = z_cap_array[global_step]
     current_blh = float(blh_fine[global_step])
     sshf = float(sshf_fine[global_step])
+    d_temperature_celsius = cuda.to_device(temp_fine[global_step].astype(np.float32))
 
 
     # Particle update (runs over j = 0..step_in_window)
@@ -1206,14 +1198,14 @@ for global_step in range(total_steps):
         u,
         v,
         z_ref,
-        z0_global,
+        d_z0_map,
         current_blh,
         Kxy,
         Kz_low,
         Kz_mid,
         Kz_high,
         np.float32(dt),
-        P_dep_surf,
+        d_v_d_map,
         P_dep_nh4,
         P_conversion,
         P_wet_dep,
@@ -1244,7 +1236,8 @@ for global_step in range(total_steps):
         d_dh_dx,
         d_dh_dy,
         d_initial_release_vz,
-        d_seasonal_factor_step
+        d_seasonal_factor_step,
+        d_temperature_celsius
     )
 
     # Apply exponential decay to all particle masses
