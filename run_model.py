@@ -9,6 +9,7 @@ import re
 import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend for headless environments
 from rasterio.transform import Affine
+from rasterio.mask import mask
 from datetime import datetime, timedelta
 import math
 import time
@@ -124,8 +125,7 @@ max_window_steps = 30  # Hard cap to limit per-step GPU work
 sample_interval = SAMPLE_INTERVAL  # Steps between concentration snapshots / sampler readings
 w_mean = 0.000  # m/s, weak convective uplift for area sources
 w_settle = 0.0000
-v_d = 0.03  # m/s surface deposition velocity (typical for NH3 over grassland/crops)
-z0 = 0.03  # m, roughness length for wind profile (0.01=smooth, 0.03=open terrain, 0.1=crops, 0.5=forest)
+
 decay_rate = 0.0  # DISABLED - chemical conversion now handled explicitly via NH3→NH4+ in kernel
 # Wet deposition parameters for ammonia (highly water-soluble)
 
@@ -193,6 +193,157 @@ else:
     start_date = "2024-04-02 12:00:00"
     end_date = "2025-07-01 12:00:00"
     print(f"\n✓ Using default dates: {start_date} to {end_date}")
+
+
+# Calculate z0 and v_d for the study area
+# Best to get deposition velocities based on land use and surface characteristics
+# Read the CORINE land cover
+print("Loading Corine Land Cover raster...")
+corine_path = "CORINE.tif"
+
+# Reproject study area to match Corine CRS
+with rasterio.open(corine_path) as src:
+    print(f"Corine CRS: {src.crs}")
+    print(f"Corine bounds: {src.bounds}")
+    
+    # Corine uses EPSG:3035 (ETRS89-LAEA)
+    corine_epsg = "EPSG:3035"
+    
+    # Reproject study area to Corine CRS
+    study_area_corine = gdf.to_crs(corine_epsg)
+    
+    # Mask and read the raster within study area
+    print("\nClipping raster to study area...")
+    geoms = [mapping for mapping in study_area_corine.geometry]
+    
+    out_image, out_transform = mask(src, geoms, crop=True, filled=False)
+    out_meta = src.meta.copy()
+    
+    # Get the data
+    data = out_image[0]
+    
+    print(f"Raster shape: {data.shape}")
+    print(f"Unique values in study area: {np.unique(data[~data.mask])}")  # Show all values
+
+# Corine codes in this raster appear to be simplified (1-44 instead of 111-523)
+#1: 111,230,0,77,255,Continuous urban fabric
+#2: 112,255,0,0,255,Discontinuous urban fabric
+#3: 121,204,77,242,255,Industrial or commercial units
+#4: 122,204,0,0,255,Road and rail networks and associated land
+#5: 123,230,204,204,255,Port areas
+#6: 124,230,204,230,255,Airports
+#7: 131,166,0,204,255,Mineral extraction sites
+#8: 132,166,77,0,255,Dump sites
+#9: 133,255,77,255,255,Construction sites
+#10: 141,255,166,255,255,Green urban areas
+#11: 142,255,230,255,255,Sport and leisure facilities
+#12: 211,255,255,168,255,Non-irrigated arable land
+#13: 212,255,255,0,255,Permanently irrigated land
+#14: 213,230,230,0,255,Rice fields
+#15: 221,230,128,0,255,Vineyards
+#16: 222,242,166,77,255,Fruit trees and berry plantations
+#17: 223,230,166,0,255,Olive groves
+#18: 231,230,230,77,255,Pastures
+#19: 241,255,230,166,255,Annual crops associated with permanent crops
+#20: 242,255,230,77,255,Complex cultivation patterns
+#21: 243,230,204,77,255,Land principally occupied by agriculture with significant areas of natural vegetation
+#22: 244,242,204,166,255,Agro-forestry areas
+#23: 311,128,255,0,255,Broad-leaved forest
+#24: 312,0,166,0,255,Coniferous forest
+#25: 313,77,255,0,255,Mixed forest
+#26: 321,204,242,77,255,Natural grasslands
+#27: 322,166,255,128,255,Moors and heathland
+#28: 323,166,230,77,255,Sclerophyllous vegetation
+#29: 324,166,242,0,255,Transitional woodland-shrub
+#30: 331,230,230,230,255,Beaches dunes sands
+#31: 332,204,204,204,255,Bare rocks
+#32: 333,204,255,204,255,Sparsely vegetated areas
+#33: 334,0,0,0,255,Burnt areas
+#34: 335,166,230,204,255,Glaciers and perpetual snow
+#35: 411,166,166,255,255,Inland marshes
+#36: 412,77,77,255,255,Peat bogs
+#37: 421,204,204,255,255,Salt marshes
+#38: 422,230,230,255,255,Salines
+#39: 423,166,166,230,255,Intertidal flats
+#40: 511,0,204,242,255,Water courses
+#41: 512,128,242,230,255,Water bodies
+#42: 521,0,255,166,255,Coastal lagoons
+#43: 522,166,255,230,255,Estuaries
+#44: 523,230,242,255,255,Sea and ocean
+# Let's create a v_d table for different classes of land cover. 1.0 for anything foresty or woodland, 0.1 for agricultural and arable areas, 0.03 for grasslands and pastures, 0.1 for urban, and 0.01 for open water and rock
+v_d_table = {
+    "foresty": 1.0,
+    "agricultural": 0.1,
+    "grasslands": 0.03,
+    "urban": 0.1,
+    "open_water_rock": 0.01
+}
+z0_table = {
+    "foresty": 1.0,
+    "agricultural": 0.1,
+    "grasslands": 0.05,
+    "urban": 1.5,
+    "open_water_rock": 0.003
+}
+
+# Corine codes should be mapped to the v_d_table categories as follows:
+# Foresty: 311, 312, 313, 314, 321, 322, 323, 324
+# Agricultural: 111, 112, 121, 122, 123, 124, 131, 132, 133, 141, 142, 143
+# Grasslands: 211, 212, 221, 222
+# Urban: 111, 112, 121, 122, 123, 124
+# Open water and rock: 511, 512, 521, 522, 523, 331, 332, 333, 334, 335
+# And also in 1-44 numbers:
+# Foresty: 30, 31, 32, 33, 34
+# Agricultural: 11, 12, 13, 14
+# Grasslands: 21, 22
+# Urban: 11, 12
+# Open water and rock: 40, 41, 42, 43, 44, 30, 31, 32, 33, 34
+# Map study_area_corine codes to v_d_table categories
+corine_to_v_d = {
+    311: "foresty", 312: "foresty", 313: "foresty", 314: "foresty",
+    321: "foresty", 322: "foresty", 323: "foresty", 324: "foresty",
+    111: "agricultural", 112: "agricultural", 121: "agricultural", 122: "agricultural",
+    123: "agricultural", 124: "agricultural", 131: "agricultural", 132: "agricultural",
+    133: "agricultural", 141: "agricultural", 142: "agricultural", 143: "agricultural",
+    211: "grasslands", 212: "grasslands", 221: "grasslands", 222: "grasslands",
+    111: "urban", 112: "urban", 121: "urban", 122: "urban", 123: "urban", 124: "urban",
+    511: "open_water_rock", 512: "open_water_rock", 521: "open_water_rock", 522: "open_water_rock",
+    523: "open_water_rock", 331: "open_water_rock", 332: "open_water_rock", 333: "open_water_rock",
+    334: "open_water_rock", 335: "open_water_rock",
+    30: "foresty", 31: "foresty", 32: "foresty", 33: "foresty", 34: "foresty",
+    11: "agricultural", 12: "agricultural", 13: "agricultural", 14: "agricultural",
+    21: "grasslands", 22: "grasslands",
+    11: "urban", 12: "urban",
+    40: "open_water_rock", 41: "open_water_rock", 42: "open_water_rock", 43: "open_water_rock",
+    44: "open_water_rock", 30: "open_water_rock", 31: "open_water_rock", 32: "open_water_rock",
+    33: "open_water_rock", 34: "open_water_rock"
+}
+
+# Calculate average v_d for the whole area, weighted by land cover type based on corine_to_v_d
+v_d_avg = 0.0
+total_area = 0.0
+for corine_code, area_fraction in study_area_corine.items():
+    land_cover_type = corine_to_v_d.get(corine_code)
+    if land_cover_type is not None:
+        v_d_avg += v_d_table[land_cover_type] * area_fraction
+        total_area += area_fraction
+if total_area > 0:
+    v_d_avg /= total_area
+
+# Calculate roughness length for the whole area, weighted by land cover type based on corine_to_v_d
+z0_avg = 0.0
+total_area = 0.0
+for corine_code, area_fraction in study_area_corine.items():
+    land_cover_type = corine_to_v_d.get(corine_code)
+    if land_cover_type is not None:
+        z0_avg += z0_table[land_cover_type] * area_fraction
+        total_area += area_fraction
+if total_area > 0:
+    z0_avg /= total_area
+
+# Create a v_d table for different land cover types
+v_d = v_d_avg
+z0 = z0_avg 
 
 
 if FLAT_SITE == 0:
