@@ -4,6 +4,7 @@
 ################################################################
 
 import os
+os.environ['OPENBLAS_NUM_THREADS'] = '1'
 import re
 import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend for headless environments
@@ -412,8 +413,7 @@ ny = int((maxy - miny) // GRID_RES)
 
 # Adaptive particle mass based on an objective target: particles per grid cell per step
 total_emission = emission_sources["total_emission_gps"].sum()
-particles_per_cell_target = 5.0
-target_particles = max(1, int(particles_per_cell_target * nx * ny))
+target_particles = max(1, int(PARTICLES_PER_CELL_TARGET * nx * ny))
 divisor = target_particles
 
 actual_mass_per_particle = E_GPS_MULTIPLIER * total_emission / divisor
@@ -421,7 +421,7 @@ actual_mass_per_particle = E_GPS_MULTIPLIER * total_emission / divisor
 mass_per_particle = actual_mass_per_particle * dt
 print(
     f"Total emission: {total_emission:.3f} g/s, target particles/step: {target_particles:,} "
-    f"({particles_per_cell_target:.2f} per cell), mass per particle: {mass_per_particle:.2e} OU"
+    f"({PARTICLES_PER_CELL_TARGET:.2f} per cell), mass per particle: {mass_per_particle:.2e} OU"
 )
 window_steps = max(1, int(timesteps_per_hour * (window_minutes / 60.0)))
 f_step = window_steps
@@ -483,7 +483,7 @@ dem_zoomed = scipy.ndimage.zoom(dem_array, (ny / dem_array.shape[0], nx / dem_ar
 dem_resized = dem_zoomed[::-1, :].T.copy()  # shape (nx, ny): [ix_east, iy_north]
 print(f"DEM resize (scipy.ndimage.zoom) time: {time.time()-t0:.2f} s")
 
-monthly_agl_top_m = 10.0
+monthly_agl_top_m = 20
 surface_layer_max = max(1, int(math.ceil(monthly_agl_top_m / DZ)))
 ground_height_grid = dem_resized.astype(np.float32)
 # conc3d grid is now terrain-following (AGL), so ground is always at k=0
@@ -510,8 +510,6 @@ initial_release_vz = None
 d_dem = cuda.to_device(dem_resized.astype(np.float32))
 d_dh_dx = cuda.to_device(dh_dx_grid)
 d_dh_dy = cuda.to_device(dh_dy_grid)
-
-z_offset = 15.0  # meters above ground to start particles
 
 total_particles = emission_sources["particles_per_step"].sum()
 print(f"Initializing {total_particles} particles...")
@@ -734,7 +732,7 @@ if receptor_specs:
 elif sampler_x_env is not None and sampler_y_env is not None:
     receptors = [{"name": "sampler", "x": float(sampler_x_env), "y": float(sampler_y_env), "height_m_agl": 5.0}]
 else:
-    receptors = [{"name": "center", "x": center_x, "y": center_y, "height_m_agl": 5.0}]
+    receptors = [{"name": "center", "x": center_x, "y": center_y, "height_m_agl": 2.0}]
 
 receptor_names = [receptor["name"] for receptor in receptors]
 receptor_output_columns = {
@@ -798,7 +796,7 @@ for step_counter in range(total_steps):
             ustar, float(blh_fine[step_counter]), 
             sshf=sshf_fine[step_counter], 
             step_counter=step_counter,
-            z_levels=[50.0, 300.0, 800.0]
+            z_levels=[float(blh_fine[step_counter])*0.1, float(blh_fine[step_counter])*0.5, float(blh_fine[step_counter])*1.0]
         )
         Kz_low = max(float(kz_profile[0]), 0.1)
         Kz_mid = max(float(kz_profile[1]), 0.5)

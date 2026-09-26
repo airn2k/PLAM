@@ -478,10 +478,18 @@ Examples:
     print("\n" + "="*70)
     print("STARTING SIMULATIONS")
     print("="*70 + "\n")
-    
+
+    max_parallel = args.max_parallel if args.max_parallel and args.max_parallel > 0 else len(chunks)
+    print(f"Max parallel chunks: {max_parallel}\n")
+
     processes = []
-    
-    for i, (chunk_name, chunk_start, chunk_end) in enumerate(chunks):
+    pending = list(enumerate(chunks))
+
+    def active_count():
+        return sum(1 for _, p, _, _ in processes if p.poll() is None)
+
+    def launch_next():
+        i, (chunk_name, chunk_start, chunk_end) = pending.pop(0)
         log_file = os.path.join(output_dir, f"simulation_logs/{chunk_name}_{timestamp}.log")
         if args.num_gpus > 0:
             gpu_id = i % args.num_gpus  # Round-robin GPU assignment
@@ -491,17 +499,20 @@ Examples:
         os.makedirs(chunk_output_dir, exist_ok=True)
         process, log = run_simulation(chunk_name, chunk_start, chunk_end, log_file, chunk_output_dir, gpu_id)
         processes.append((chunk_name, process, log, gpu_id))
-        
+
         # Small delay to avoid startup conflicts
         time.sleep(2)
-    
+
+    while pending and active_count() < max_parallel:
+        launch_next()
+
     print("\n" + "="*70)
-    print("ALL SIMULATIONS STARTED")
+    print(f"LAUNCHED {len(processes)}/{len(chunks)} SIMULATIONS (max parallel: {max_parallel})")
     print("="*70)
     print("\nMonitoring progress (use Ctrl+C to stop all)...")
     print("\nLog files:")
-    for name, _, log, gpu_id in processes:
-        print(f"  tail -f {log}  # {name} on GPU {gpu_id}")
+    for chunk_name, chunk_start, chunk_end in chunks:
+        print(f"  tail -f {os.path.join(output_dir, f'simulation_logs/{chunk_name}_{timestamp}.log')}  # {chunk_name}")
     print()
     
     try:
@@ -510,17 +521,20 @@ Examples:
         last_update = 0
         last_gpu_update = 0
         
-        while any(p.poll() is None for _, p, _, _ in processes):
+        while pending or any(p.poll() is None for _, p, _, _ in processes):
             time.sleep(5)
+
+            while pending and active_count() < max_parallel:
+                launch_next()
             
             current_time = time.time()
             
             # Show status every 10 seconds
             if current_time - last_update >= 10:
-                running = sum(1 for _, p, _, _ in processes if p.poll() is None)
+                running = active_count()
                 completed = len(processes) - running
                 elapsed = current_time - start_time
-                print(f"[{elapsed/60:.1f}m] Progress: {completed}/{len(processes)} complete, {running} running...")
+                print(f"[{elapsed/60:.1f}m] Progress: {completed}/{len(chunks)} complete, {running} running, {len(pending)} queued...")
                 last_update = current_time
                 
             # Show GPU status every 60 seconds
@@ -528,16 +542,20 @@ Examples:
                 if args.num_gpus > 0:
                     print("\nGPU Status:")
                     try:
-                        # Also print the simulation progress by comparing the last recorded time in the csv output with the end of the chunk. Datetime is in YYYY-MM-DD HH:MM format
-                        
-                        # Replace spaces and colons in chunk_start and chunk_end for file naming
-                        start_clean = chunk_start.strftime('%Y-%m-%d_%H-%M-%S')
-                        end_clean = chunk_end.strftime('%Y-%m-%d_%H-%M-%S')
-                        if os.path.exists(os.path.join(chunk_output_dir, f'sampler_timeseries_{start_clean}_{end_clean}.csv')):
-                            latest_sample_date = pd.read_csv(os.path.join(chunk_output_dir, f'sampler_timeseries_{start_clean}_{end_clean}.csv'), parse_dates=['date_time']).date_time.max()
-                            progress = (latest_sample_date - chunk_start).total_seconds() / (chunk_end - chunk_start).total_seconds() * 100
-                            print(f"  Simulation progress: {progress:.1f}%")
-                            print(f" Estimated time remaining: {((100/progress * elapsed/60)-elapsed/60):.1f} minutes")
+                        # Print simulation progress for each currently running chunk by comparing
+                        # the last recorded time in its csv output with the end of that chunk.
+                        running_names = {name for name, p, _, _ in processes if p.poll() is None}
+                        for chunk_name, chunk_start, chunk_end in chunks:
+                            if chunk_name not in running_names:
+                                continue
+                            chunk_output_dir = os.path.join(output_dir, chunk_name)
+                            start_clean = chunk_start.strftime('%Y-%m-%d_%H-%M-%S')
+                            end_clean = chunk_end.strftime('%Y-%m-%d_%H-%M-%S')
+                            csv_path = os.path.join(chunk_output_dir, f'sampler_timeseries_{start_clean}_{end_clean}.csv')
+                            if os.path.exists(csv_path):
+                                latest_sample_date = pd.read_csv(csv_path, parse_dates=['date_time']).date_time.max()
+                                progress = (latest_sample_date - chunk_start).total_seconds() / (chunk_end - chunk_start).total_seconds() * 100
+                                print(f"  {chunk_name}: {progress:.1f}% complete")
 
                         nvidia_output = subprocess.run(['nvidia-smi', '--query-gpu=index,utilization.gpu,memory.used,memory.total', '--format=csv,noheader,nounits'], 
                                                         capture_output=True, text=True, timeout=5).stdout
@@ -595,6 +613,7 @@ Examples:
     
     except KeyboardInterrupt:
         print("\n\n⚠️  Interrupted by user. Terminating all processes...")
+        pending.clear()
         for name, process, _, gpu_id in processes:
             if process.poll() is None:
                 process.terminate()

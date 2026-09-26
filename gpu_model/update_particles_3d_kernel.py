@@ -108,23 +108,26 @@ def update_particles_3d_kernel(
         return 0.0
     
     # Calculate wind speed ratio using log profile with stability
-    if particle_height_agl < blh:
-        zeta_z = particle_height_agl / L_MO
-        zeta_ref = z_ref / L_MO
+    if particle_height_agl > 20:
+        if particle_height_agl < blh:
+            zeta_z = particle_height_agl / L_MO
+            zeta_ref = z_ref / L_MO
 
-        log_term = math.log(particle_height_agl / z_ref)
-        stability_correction = psi_m_profile(zeta_z) - psi_m_profile(zeta_ref)
-        
-        # Wind speed ratio
-        wind_ratio = (math.log(particle_height_agl / z0) + stability_correction) / (math.log(z_ref / z0) + psi_m_profile(zeta_ref))
-        wind_ratio = max(min(wind_ratio, 3.0), 0.1)  # Prevent extreme values
+            log_term = math.log(particle_height_agl / z_ref)
+            stability_correction = psi_m_profile(zeta_z) - psi_m_profile(zeta_ref)
+            
+            # Wind speed ratio
+            wind_ratio = (math.log(particle_height_agl / z0) + stability_correction) / (math.log(z_ref / z0) + psi_m_profile(zeta_ref))
+            # Prevent extreme values
+            wind_ratio = max(min(wind_ratio, 3.0), 0.1)  # Prevent extreme values
+        else:
+            # Above BLH, assume constant wind
+            wind_ratio = (math.log(blh / z0)) / (math.log(z_ref / z0))
+            wind_ratio = max(min(wind_ratio, 3.0), 0.1)  # Prevent extreme values
     else:
-        # Above BLH, assume constant wind
-        wind_ratio = (math.log(blh / z0)) / (math.log(z_ref / z0))
-        wind_ratio = max(min(wind_ratio, 2.5), 0.8)
-
-    wind_ratio = 1.0  # For testing, override wind ratio to 1.0 (no change in wind speed)
-    # Apply ratio to both components
+        # Below 20 meters, assume wind ratio is 1
+        wind_ratio = 1.0
+        
     u_z = u_ref * wind_ratio
     v_z = v_ref * wind_ratio
 
@@ -192,23 +195,30 @@ def update_particles_3d_kernel(
     particle_height_agl = z[idx, k] - z_dem
     # Smooth Kz profile (tanh transitions) + Thomson drift correction
     # Transition heights and smoothing half-width
-    z1 = 100.0   # low ↔ mid transition (AGL)
-    z2 = 500.0   # mid ↔ high transition (AGL)
-    delta = 20.0  # smoothing half-width (m)
-    h = max(particle_height_agl, 0.1)
-    t1 = math.tanh((h - z1) / delta)
-    t2 = math.tanh((h - z2) / delta)
-    s1 = 0.5 * (1.0 + t1)
-    s2 = 0.5 * (1.0 + t2)
-    current_kz = Kz_low + (Kz_mid - Kz_low) * s1 + (Kz_high - Kz_mid) * s2
-    # dKz/DZ (analytical derivative of tanh smoothing)
-    ds1 = 0.5 / delta * (1.0 - t1 * t1)
-    ds2 = 0.5 / delta * (1.0 - t2 * t2)
-    dKz_DZ = (Kz_mid - Kz_low) * ds1 + (Kz_high - Kz_mid) * ds2
+    z1 = 0.1 * blh # low ↔ mid transition (AGL)
+    z2 = 0.5 * blh   # mid ↔ high transition (AGL)
+    # delta = 20.0  # smoothing half-width (m)
+    # h = max(particle_height_agl, 0.1)
+    # t1 = math.tanh((h - z1) / delta)
+    # t2 = math.tanh((h - z2) / delta)
+    # s1 = 0.5 * (1.0 + t1)
+    # s2 = 0.5 * (1.0 + t2)
+    # current_kz = Kz_low + (Kz_mid - Kz_low) * s1 + (Kz_high - Kz_mid) * s2
+    # # dKz/DZ (analytical derivative of tanh smoothing)
+    # ds1 = 0.5 / delta * (1.0 - t1 * t1)
+    # ds2 = 0.5 / delta * (1.0 - t2 * t2)
+    # dKz_DZ = (Kz_mid - Kz_low) * ds1 + (Kz_high - Kz_mid) * ds2
+    if particle_height_agl > 0.0 and particle_height_agl < z1:
+        current_kz = Kz_low
+    elif particle_height_agl >= z1 and particle_height_agl < z2:
+        current_kz = Kz_mid
+    elif particle_height_agl >= z2:
+        current_kz = Kz_high
+
 
     if current_kz > 0.0:
         std_z = math.sqrt(2.0 * current_kz * dt)
-        z[idx, k] += dKz_DZ * dt + xoroshiro128p_normal_float32(rng_states, k) * std_z
+        z[idx, k] +=  xoroshiro128p_normal_float32(rng_states, k) * std_z #+ dKz_DZ * dt
 
     # # Chemical conversion: NH3 (type=0) → NH4+ (type=1)
     if SPECIES == "NH3" and particle_type[idx, k] == 0 and P_conversion > 0.0:
@@ -252,7 +262,7 @@ def update_particles_3d_kernel(
             if xoroshiro128p_uniform_float32(rng_states, k) <= P_wet_dep:
                 ix = int(math.floor(x[idx, k] / GRID_RES) - math.floor(minx / GRID_RES))
                 iy = int(math.floor(y[idx, k] / GRID_RES) - math.floor(miny / GRID_RES))
-                add_mass = particle_mass_g[idx]
+                add_mass = particle_mass_g[idx]*seasonal_factor_step[k]
                 if 0 <= ix < nx and 0 <= iy < ny:
                     cuda.atomic.add(depo_grid, (ix, iy), add_mass)
                 cuda.atomic.add(mass_budget, MASS_BUDGET_WET_DEP, add_mass)
