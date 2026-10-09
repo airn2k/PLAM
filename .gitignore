@@ -25,3 +25,4 @@ hpc_tuning.sh
 plot_diagnostic_summary_figures.py
 diagnostic_figures/
 changelog.md
+*.sh

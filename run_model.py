@@ -116,7 +116,7 @@ CONC_INCLUDE_NH4 = CONC_SPECIES_MODE == "total"
 ################################################################
 
 # choose thread size
-threads = 1024
+threads = 256
 timestep_cfl_fraction = 0.5  # Target max displacement per step as fraction of GRID_RES
 min_timesteps_per_hour = MIN_TIMESTEPS_PER_HOUR
 max_timesteps_per_hour = MAX_TIMESTEPS_PER_HOUR
@@ -556,11 +556,11 @@ nx = int((maxx - minx) // GRID_RES)
 ny = int((maxy - miny) // GRID_RES)
 
 # Adaptive particle mass based on an objective target: particles per grid cell per step
-total_emission = emission_sources["total_emission_gps"].sum()
+total_emission = emission_sources["total_emission_gps"].sum()*E_GPS_MULTIPLIER
 target_particles = max(1, int(PARTICLES_PER_CELL_TARGET * nx * ny))
 divisor = target_particles
 
-actual_mass_per_particle = E_GPS_MULTIPLIER * total_emission / divisor
+actual_mass_per_particle = total_emission / divisor
 # Convert to mass per particle for this timestep (g per particle per step)
 mass_per_particle = actual_mass_per_particle * dt
 print(
@@ -1302,7 +1302,7 @@ for global_step in range(total_steps):
             hourly_agl_collection.append(hourly_average_agl)
             
         
-        scale_factors = (1, 1, 1)  # Downscale by half in each dimension
+        scale_factors = (1, 1, 1)  # Downscale if needed
 
         sample_datetime = datetime.strptime(start_date, '%Y-%m-%d %H:%M:%S') + timedelta(
             minutes=global_step * (60.0 / timesteps_per_hour)
