@@ -1126,6 +1126,8 @@ monthly_surface_sum_depo = {} if DEPOSITION_ENABLED else None
 hourly_agl_collection = [] if HOURLY_MAPS == 1 else None
 d_v_d_map = cuda.to_device(v_d_map.astype(np.float16))
 d_z0_map = cuda.to_device(z0_map.astype(np.float16))
+#zero the concentration accumulator
+zero_3d_kernel[conc3d_blocks, threads](d_conc3d)
 
 for global_step in range(total_steps):
     start = time.time()
@@ -1245,50 +1247,48 @@ for global_step in range(total_steps):
     decay_mass_kernel[decay_blocks, threads](d_particle_mass_g, decay_factor, np.int32(f_step))
 
 
-    
-    
-    #col_avg = col_avg_monthly
-    #conc3d_swapped = conc3d.transpose(1,2,0)
-    #th = int(conc3d_swapped.shape[2]/2)
-    #col_avg = conc3d_swapped[:,1:200,th-10:th+10].mean(axis=2)
-    
+    update_grid_3d_gpu_step(
+        step_in_window,
+        head,
+        f_step,
+        GRID_RES,
+        DZ,
+        minx,
+        miny,
+        d_x,
+        d_y,
+        d_z,
+        d_particle_type,
+        d_conc3d,
+        d_particle_mass_g,
+        timesteps_per_hour,
+        nx,
+        ny,
+        nz,
+        CONC_INCLUDE_NH4,
+        d_dem,
+        threads=threads,
+        seasonal_factor_step=d_seasonal_factor_step
+    )   
 
 
     if (global_step % sample_interval) == 0:
         print("Step", global_step, "of", total_steps, '...')
 
         # Zero persistent device conc3d buffer in-place
-        zero_3d_kernel[conc3d_blocks, threads](d_conc3d)
-        update_grid_3d_gpu_step(
-            step_in_window,
-            head,
-            f_step,
-            GRID_RES,
-            DZ,
-            minx,
-            miny,
-            d_x,
-            d_y,
-            d_z,
-            d_particle_type,
-            d_conc3d,
-            d_particle_mass_g,
-            timesteps_per_hour,
-            nx,
-            ny,
-            nz,
-            CONC_INCLUDE_NH4,
-            d_dem,
-            threads=threads,
-            seasonal_factor_step=d_seasonal_factor_step
-        )
+
 
         depo_grid = d_depo.copy_to_host()
         if SPECIES == "NH3":
             conc3d = d_conc3d.copy_to_host()
         elif SPECIES == "ODOR":
             conc3d = d_conc3d.copy_to_host()*100
-            
+        
+        #zero the concentration accumulator
+        zero_3d_kernel[conc3d_blocks, threads](d_conc3d)
+        
+        # Take average based on sampling interval
+        conc3d = conc3d/sample_interval
         minutes_per_step = 60.0 / timesteps_per_hour
         total_minutes = global_step * minutes_per_step
         hours_i = int(total_minutes // 60)
@@ -1302,7 +1302,7 @@ for global_step in range(total_steps):
             hourly_agl_collection.append(hourly_average_agl)
             
         
-        scale_factors = (1, 1, 1)  # Downscale if needed
+        scale_factors = (1, 1, 1)  # Downscale 
 
         sample_datetime = datetime.strptime(start_date, '%Y-%m-%d %H:%M:%S') + timedelta(
             minutes=global_step * (60.0 / timesteps_per_hour)
@@ -1346,98 +1346,96 @@ for global_step in range(total_steps):
         print(f"Peak-terrain concentration ({species_unit}):", peak_terrain_value)
         print(f"Domain max concentration ({species_unit}):", domain_max_value)
 
+        #Calculate frame's date and time 
 
-        if (global_step % 1) == 0:
-            #Calculate frame's date and time 
+        start_datetime = datetime.strptime(start_date, '%Y-%m-%d %H:%M:%S')
+        frame_date = start_datetime + timedelta(hours=hours_i, minutes=minutes_i)
+        
+        # Create DataFrame with matching timestamps for each concentration value
+        timestamps = []
+        for i, conc in enumerate(sampler_conc):
+            step_time = start_datetime + timedelta(minutes=i * sample_interval * (60.0 / timesteps_per_hour))
+            timestamps.append(step_time.strftime('%Y-%m-%d %H:%M'))
+        
+        # Clean filename (remove spaces and colons)
+        start_clean = start_date.replace(' ', '_').replace(':', '-')
+        end_clean = end_date.replace(' ', '_').replace(':', '-')
 
-            start_datetime = datetime.strptime(start_date, '%Y-%m-%d %H:%M:%S')
-            frame_date = start_datetime + timedelta(hours=hours_i, minutes=minutes_i)
+
+        data = {
+            'date_time': timestamps,
+            f'peak_terrain_concentration_{species_unit}': peak_terrain_conc,
+            f'domain_max_concentration_{species_unit}': domain_max_conc,
+        }
+        for receptor_name in receptor_names:
+            data[receptor_output_columns[receptor_name]] = receptor_conc_by_name[receptor_name]
+        if len(receptor_names) == 1:
+            data[f'concentration_{species_unit}'] = receptor_conc_by_name[receptor_names[0]]
+        df = pd.DataFrame(data)
+        filename = os.path.join(output_dir, f'sampler_timeseries_{start_clean}_{end_clean}.csv')
+
+        df.to_csv(filename, index_label='time_step_100s')
+        print(f"✓ Saved sampler timeseries: {filename}")
+        if PRODUCE_MAPS == 1:
+            conc_agl = agl_band_mean_weighted(
+                conc3d,
+                ground_height_grid,
+                DZ,
+                50,
+            )
+        
+            fig, ax = plt.subplots(figsize=(8, 6))
+            plt.style.use("dark_background")
+            masked_grid = np.ma.masked_where(
+                conc_agl.T < 1e-9, conc_agl.T  # Lower threshold to show very small values
+            )
+
+            # Create a DEM background using hillshade
+            dem_hillshade = hillshade(dem_array, azimuth=315, angle_altitude=45)
+
+            ax.imshow(
+                dem_hillshade, 
+                cmap="gray", 
+                extent=[minx_3857, maxx_3857, miny_3857, maxy_3857],
+                zorder=0,
+                alpha=1,
+            )
+
+            im = ax.imshow(
+                masked_grid, 
+                origin="lower",
+                cmap="hot",
+                extent=[minx_3857, maxx_3857, miny_3857, maxy_3857],
+                zorder=1,
+                alpha=0.9,
+                vmin=0,
+                vmax=10
+            )
+
+            # Add date and time annnotation as text in the top-left corner
+            ax.text(0.02, 0.95, frame_date.strftime('%Y-%m-%d %H:%M'), transform=ax.transAxes, fontsize=12, color="white", verticalalignment='top', bbox=dict(facecolor='black', alpha=0.5, edgecolor='none', boxstyle='round,pad=0.3'))
+
+            cax = inset_axes(ax, width="5%", height="50%", loc="lower right", borderpad=1.0)
+            cbar = fig.colorbar(im, cax=cax, orientation="vertical")
+            cbar.set_label(f"Avg ambient {species_label} ({species_unit})\n(0-50 m AGL mean)", fontsize=12, color="white", bbox=dict(facecolor='black', alpha=0.8, edgecolor='none', boxstyle='round,pad=0.3'))
+            cbar.ax.tick_params(labelsize=12, colors="white")
             
-            # Create DataFrame with matching timestamps for each concentration value
-            timestamps = []
-            for i, conc in enumerate(sampler_conc):
-                step_time = start_datetime + timedelta(minutes=i * sample_interval * (60.0 / timesteps_per_hour))
-                timestamps.append(step_time.strftime('%Y-%m-%d %H:%M'))
-            
-            # Clean filename (remove spaces and colons)
-            start_clean = start_date.replace(' ', '_').replace(':', '-')
-            end_clean = end_date.replace(' ', '_').replace(':', '-')
+            cbar.ax.yaxis.set_ticks_position("left")
+            cbar.ax.yaxis.set_label_position("left")
 
-
-            data = {
-                'date_time': timestamps,
-                f'peak_terrain_concentration_{species_unit}': peak_terrain_conc,
-                f'domain_max_concentration_{species_unit}': domain_max_conc,
-            }
-            for receptor_name in receptor_names:
-                data[receptor_output_columns[receptor_name]] = receptor_conc_by_name[receptor_name]
-            if len(receptor_names) == 1:
-                data[f'concentration_{species_unit}'] = receptor_conc_by_name[receptor_names[0]]
-            df = pd.DataFrame(data)
-            filename = os.path.join(output_dir, f'sampler_timeseries_{start_clean}_{end_clean}.csv')
-
-            df.to_csv(filename, index_label='time_step_100s')
-            print(f"✓ Saved sampler timeseries: {filename}")
-            if PRODUCE_MAPS == 1:
-                conc_agl = agl_band_mean_weighted(
-                    conc3d,
-                    ground_height_grid,
-                    DZ,
-                    50,
-                )
-           
-                fig, ax = plt.subplots(figsize=(8, 6))
-                plt.style.use("dark_background")
-                masked_grid = np.ma.masked_where(
-                    conc_agl.T < 1e-9, conc_agl.T  # Lower threshold to show very small values
-                )
-
-                # Create a DEM background using hillshade
-                dem_hillshade = hillshade(dem_array, azimuth=315, angle_altitude=45)
-
-                ax.imshow(
-                    dem_hillshade, 
-                    cmap="gray", 
-                    extent=[minx_3857, maxx_3857, miny_3857, maxy_3857],
-                    zorder=0,
-                    alpha=1,
-                )
-
-                im = ax.imshow(
-                    masked_grid, 
-                    origin="lower",
-                    cmap="hot",
-                    extent=[minx_3857, maxx_3857, miny_3857, maxy_3857],
-                    zorder=1,
-                    alpha=0.9,
-                    vmin=0,
-                    vmax=10
-                )
-
-                # Add date and time annnotation as text in the top-left corner
-                ax.text(0.02, 0.95, frame_date.strftime('%Y-%m-%d %H:%M'), transform=ax.transAxes, fontsize=12, color="white", verticalalignment='top', bbox=dict(facecolor='black', alpha=0.5, edgecolor='none', boxstyle='round,pad=0.3'))
-
-                cax = inset_axes(ax, width="5%", height="50%", loc="lower right", borderpad=1.0)
-                cbar = fig.colorbar(im, cax=cax, orientation="vertical")
-                cbar.set_label(f"Avg ambient {species_label} ({species_unit})\n(0-50 m AGL mean)", fontsize=12, color="white", bbox=dict(facecolor='black', alpha=0.8, edgecolor='none', boxstyle='round,pad=0.3'))
-                cbar.ax.tick_params(labelsize=12, colors="white")
-                
-                cbar.ax.yaxis.set_ticks_position("left")
-                cbar.ax.yaxis.set_label_position("left")
-
-                # Tick-label backgrounds
-                for ticklabel in cbar.ax.get_yticklabels():
-                    ticklabel.set_bbox(dict(facecolor='black', alpha=0.8, edgecolor='none', boxstyle='round,pad=0.3')
+            # Tick-label backgrounds
+            for ticklabel in cbar.ax.get_yticklabels():
+                ticklabel.set_bbox(dict(facecolor='black', alpha=0.8, edgecolor='none', boxstyle='round,pad=0.3')
 )
 
-                
-                ax.axis("off")
-                fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
-                # Save to site outputs directory with timestamp
-                fig.savefig(os.path.join(output_dir, f"fig{global_step}.png"), dpi=300, bbox_inches='tight',pad_inches=0)
-                plt.close(fig)
+            
+            ax.axis("off")
+            fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
+            # Save to site outputs directory with timestamp
+            fig.savefig(os.path.join(output_dir, f"fig{global_step}.png"), dpi=300, bbox_inches='tight',pad_inches=0)
+            plt.close(fig)
 
- 
+
 
     remove_outofbound_3d_gpu_step(
         step_in_window,

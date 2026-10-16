@@ -6,7 +6,7 @@ def estimate_gpu_memory_usage(n_particles, f_step, n_arrays=5, extra_bytes=0):
     extra_bytes: add any extra bytes for other arrays (e.g., depo_grid, conc3d)
     Returns usage in bytes, MB, and GB.
     """
-    bytes_per_array = f_step * n_particles * 4
+    bytes_per_array = f_step * n_particles * 2
     total_bytes = n_arrays * bytes_per_array + extra_bytes
     mb = total_bytes / (1024**2)
     gb = total_bytes / (1024**3)
