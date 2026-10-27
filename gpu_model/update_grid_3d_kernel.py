@@ -38,13 +38,8 @@ def update_grid_3d_kernel(
         return
     ix = int((x[idx, k] // GRID_RES) - int(minx / GRID_RES))
     iy = int((y[idx, k] // GRID_RES) - int(miny / GRID_RES))
-    # Terrain-following: iz is AGL (z minus local DEM height)
-    local_dem = 0.0
-    if 0 <= ix < nx and 0 <= iy < ny:
-        local_dem = float(dem[ix, iy])
-
-    height_agl = z[idx, k] - local_dem
-    iz = int(height_agl / DZ)
+    iz = int(z[idx, k] / DZ)
+    
     if 0 <= ix < nx and 0 <= iy < ny and 0 <= iz < nz:
         voxel_vol = GRID_RES * GRID_RES * DZ
         val = (particle_mass_g[idx]*seasonal_factor_step[k]) / voxel_vol

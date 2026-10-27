@@ -59,7 +59,9 @@ def update_particles_3d_kernel(
     sshf,         # surface sensible heat flux (W/m²)
     release_vz,         # (n_part,) float32 initial vertical velocity for newly emitted particles
     seasonal_factor_step,  # (n_part,) float32 seasonal factor for each particle
-    temperature_celsius  # (n_part,) float32 temperature for each particle
+    temperature_celsius,  # (n_part,) float32 temperature for each particle
+    #bool_day  # (n_part,) int32, 1=day, 0=night
+    #slope_5  # scalar float32 representing the fraction of slope > 5 degrees
 ):
     j = cuda.blockIdx.x
     k = cuda.threadIdx.x + cuda.blockDim.x * cuda.blockIdx.y
@@ -90,7 +92,10 @@ def update_particles_3d_kernel(
     # Calculate Monin-Obukhov length for stability
     wind_speed_ref = math.sqrt(u_ref*u_ref + v_ref*v_ref)
     ustar = (kappa * wind_speed_ref) / math.log(z_ref/z0)
-    
+    # Temperature gradient along the vertical between n-1 and n+1 layers
+    lapse_rate = 6.5 / 1000  # Convert to K/m
+    temp_particle_height_agl = temperature_celsius - lapse_rate * particle_height_agl
+
     H_kinematic = sshf/ (1.225 * 1005)  # Convert to kinematic units
     if math.fabs(H_kinematic) > 1e-6:
         L_MO = -(ustar*ustar*ustar) / (kappa * g * H_kinematic)
@@ -171,10 +176,9 @@ def update_particles_3d_kernel(
         if height_weight_oro < 0.0:
             height_weight_oro = 0.0
         if OROGRAPHIC_USE_PRECHANNEL_WIND:
-            w_oro = oro_alpha * height_weight_oro * (u_ref * wind_ratio * slope_x + v_ref * wind_ratio * slope_y)
+            w_oro = oro_alpha * height_weight_oro * (u_z * slope_x + v_z * slope_y)
         else:
             w_oro = oro_alpha * height_weight_oro * (u_z * slope_x + v_z * slope_y)
-
 
     x[idx, k] += u_z * dt
     y[idx, k] += v_z * dt
@@ -232,15 +236,15 @@ def update_particles_3d_kernel(
     if DEPOSITION_ENABLED == 1:
         if 0 <= ix_dem < dem_nx and 0 <= iy_dem < dem_ny:
             v_d = float(v_d_map[ix_dem, iy_dem]) if 0 <= ix_dem < dem_nx and 0 <= iy_dem < dem_ny else 0.0
-            v_d_temp = float(v_d * (1.0 + 0.04 * (temperature_celsius - 15.0)))
+            v_d_temp = float(v_d * (1.0 + 0.04 * (temp_particle_height_agl - 15.0)))
             v_d_temp = max(0.01, min(0.05, v_d_temp))
-            H_raw = float(2*math.sqrt(Kz_low * dt))  # rough estimate of surface layer height
+            H_raw = float(2*math.sqrt(Kz_low * dt))  # rough estimate of surface mixing layer height
             H_min = float(0.2*blh)
             H_max = float(120.0)
             H = float(min(H_max, max(H_min, H_raw))*H_FACTOR)
             P_dep_surf = np.float32(min(1.0, (v_d_temp * dt)/H))
             z_dem = dem[ix_dem, iy_dem]
-            if z[idx, k] < z_dem:
+            if z[idx, k] < z_dem: 
                 P_dep = P_dep_surf if particle_type[idx, k] == 0 else P_dep_nh4
                 if xoroshiro128p_uniform_float32(rng_states, k) <= P_dep:
                     ix = int(math.floor(x[idx, k] / GRID_RES) - math.floor(minx / GRID_RES))
@@ -290,15 +294,6 @@ def update_particles_3d_kernel(
             # e=1 mirrors depth exactly; e<1 damps rebound near the surface.
             restitution = 0.35
             z_new = z_dem + restitution * penetration
-            z_floor = z_dem + z0
-            if z_new < z_floor:
-                z_new = z_floor
-            z[idx, k] = z_new
-
-    if 0 <= ix_dem < dem_nx and 0 <= iy_dem < dem_ny:
-        z_cap_abs = z_dem + z_cap
-        if z[idx, k] >= z_cap_abs:
-            z_new = 2.0 * z_cap_abs - z[idx, k]
             z_floor = z_dem + z0
             if z_new < z_floor:
                 z_new = z_floor

@@ -52,6 +52,8 @@ def update_particles_3d_gpu_step(
     d_initial_release_vz,
     d_seasonal_factor_step,
     d_temperature_celsius,
+    #d_bool_day,
+    #d_slope_5,
     ):
     n_part = d_x.shape[1]
     # 2D grid: blockIdx.x = time-slice j (0..step_in_window),
@@ -111,5 +113,8 @@ def update_particles_3d_gpu_step(
         np.float32(float(sshf)),
         d_initial_release_vz,
         d_seasonal_factor_step,
-        np.float32(d_temperature_celsius)
+        np.float32(d_temperature_celsius),
+        #np.float32(d_bool_day),
+        #np.float32(d_slope_5),
+
     )

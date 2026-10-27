@@ -24,7 +24,7 @@ def save_monthly_agl_plots(
         monthly_mean = monthly_surface_sum[month_key] / count
         conc_plot = monthly_mean.astype(np.float64, copy=False)
 
-        vmax = float(np.nanpercentile(conc_plot, 99.0))
+        vmax = float(np.nanpercentile(conc_plot, 98.0))
         if not np.isfinite(vmax) or vmax <= 0.0:
             vmax = 10.0
 

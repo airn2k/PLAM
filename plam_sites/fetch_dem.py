@@ -38,7 +38,7 @@ def fetch_and_load_dem(minx, miny, maxx, maxy, crs_src, dem_dir="dem_map", outpu
     params["west"] = lon_min
     params["east"] = lon_max
     params["cache_dir"] = cache_dir
-    params["dem_type"] = 'AW3D30'  # Use SRTMGL1 for higher resolution.must be one of ('SRTMGL3', 'SRTMGL1', 'SRTMGL1_E', 'AW3D30', 'AW3D30_E', 'SRTM15Plus', 'NASADEM', 'COP30', 'COP90', 'EU_DTM', 'GEDI_L3', 'GEBCOIceTopo', 'GEBCOSubIceTopo', 'CA_MRDEM_DSM', 'CA_MRDEM_DTM', 'USGS30m', 'USGS10m', 'USGS1m').
+    params["dem_type"] = 'COP30'  # Use SRTMGL1 for higher resolution.must be one of ('SRTMGL3', 'SRTMGL1', 'SRTMGL1_E', 'AW3D30', 'AW3D30_E', 'SRTM15Plus', 'NASADEM', 'COP30', 'COP90', 'EU_DTM', 'GEDI_L3', 'GEBCOIceTopo', 'GEBCOSubIceTopo', 'CA_MRDEM_DSM', 'CA_MRDEM_DTM', 'USGS30m', 'USGS10m', 'USGS1m').
     topo = Topography(**params)
     topo.fetch()
 

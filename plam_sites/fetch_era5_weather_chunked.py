@@ -93,6 +93,90 @@ def generate_monthly_chunks(start_date, end_date):
     
     return chunks
 
+def extract_combined_grib(temp_grib, lat, lon, start_date, end_date):
+    ds = xr.open_dataset(temp_grib, engine="cfgrib", 
+                        backend_kwargs={'filter_by_keys': {'stepType': 'instant'}})
+
+    # Subset to exact date range
+    try:
+        ds = ds.sel(time=slice(start_date, end_date))
+    except Exception as e:
+        print(f"Error selecting time slice: {e}")
+        return None
+
+    # Check if the grib file contains the expected variables and the latitude/longitude dimensions
+    expected_vars = ['u10', 'v10', 'blh', 't2m', 'd2m', 'tcc']
+    for var in expected_vars:
+        if var not in ds:
+            print(f"Missing variable {var} in GRIB file")
+            return None
+    if 'latitude' not in ds.dims or 'longitude' not in ds.dims:
+        print("Missing latitude or longitude dimensions in GRIB file")
+        return None
+    # Ensure lat and lon are within the dataset bounds
+    if not (ds['latitude'].min() <= lat <= ds['latitude'].max()):
+        print(f"Latitude {lat} out of bounds")
+        return None
+    if not (ds['longitude'].min() <= lon <= ds['longitude'].max()):
+        print(f"Longitude {lon} out of bounds")
+        return None
+    # Select the nearest grid point to the specified lat/lon
+    ds = ds.sel(latitude=lat, longitude=lon, method='nearest')
+    print('Passed variable and bounds checks')
+
+    # Spatially average over the box
+    u10 = ds['u10']
+    v10 = ds['v10']
+    blh = ds['blh']
+    t2m = ds['t2m']
+    d2m = ds['d2m']
+    tcc = ds['tcc']
+    
+    # Load accumulated variables
+    ds_accum = xr.open_dataset(temp_grib, engine="cfgrib",
+                              backend_kwargs={'filter_by_keys': {'stepType': 'accum'}})
+    ds_accum = ds_accum.sel(time=slice(start_date, end_date))
+    sshf = ds_accum['sshf'].mean(dim=['latitude', 'longitude'])
+    tp = ds_accum['tp'].mean(dim=['latitude', 'longitude'])
+    ssrd = ds_accum['ssrd'].mean(dim=['latitude', 'longitude'])
+    
+    # Convert to DataFrames
+    df_u10 = u10.to_dataframe(name='u10').reset_index()
+    df_v10 = v10.to_dataframe(name='v10').reset_index()
+    df_blh = blh.to_dataframe(name='blh').reset_index()
+    df_t2m = t2m.to_dataframe(name='t2m').reset_index()
+    df_d2m = d2m.to_dataframe(name='d2m').reset_index()
+    df_tcc = tcc.to_dataframe(name='tcc').reset_index()
+    df_sshf = sshf.to_dataframe(name='sshf').reset_index()
+    df_tp = tp.to_dataframe(name='tp').reset_index()
+    df_ssrd = ssrd.to_dataframe(name='ssrd').reset_index()
+    
+    # Combine into single DataFrame
+    weather_df = df_u10[['time']].copy()
+    weather_df['u10'] = df_u10['u10']
+    weather_df['v10'] = df_v10['v10']
+    weather_df['blh'] = df_blh['blh']
+    weather_df['temp_celsius'] = df_t2m['t2m'] - 273.15
+    weather_df['dewpoint_celsius'] = df_d2m['d2m'] - 273.15
+    weather_df['cloud_cover'] = df_tcc['tcc']
+    
+    # Calculate relative humidity
+    import numpy as np
+    T = weather_df['temp_celsius']
+    Td = weather_df['dewpoint_celsius']
+    weather_df['relative_humidity'] = 100.0 * np.exp((17.625 * Td) / (243.04 + Td)) / np.exp((17.625 * T) / (243.04 + T))
+    
+    weather_df['sshf'] = df_sshf['sshf'] / 3600.0  # J/m² to W/m²
+    weather_df['precipitation_mm_hr'] = df_tp['tp'] * 1000.0  # m to mm
+    weather_df['solar_radiation_w_m2'] = df_ssrd['ssrd'] / 3600.0  # J/m² to W/m²
+    
+    # Add metadata columns
+    weather_df.insert(1, 'number', 0)
+    weather_df.insert(2, 'step', '0 days')
+    weather_df.insert(3, 'surface', 0)
+    weather_df.insert(4, 'valid_time', weather_df['time'])
+    
+    return weather_df
 
 def fetch_single_chunk(center_lat, center_lon, start_date, end_date, 
                        lat_min, lat_max, lon_min, lon_max, client):
@@ -366,14 +450,26 @@ def fetch_era5_weather_chunked(start_date, end_date):
     
     
     try:
-        df = fetch_era5_chunked(
-            center_lat=lat,
-            center_lon=lon,
-            start_date=start_date,
-            end_date=end_date,
-            config_file="./plam_sites/config.ini",
-            output_csv=output_path
-        )
+        if os.path.exists('./era5_dataset/combined.grib'):
+            print("✓ Using existing combined GRIB file")
+            df = extract_combined_grib(
+                temp_grib='./era5_dataset/combined.grib',
+                lat=lat,
+                lon=lon,
+                start_date=start_date,
+                end_date=end_date
+            )
+            df.to_csv(output_path, index=False, mode='a', header=not os.path.exists(output_path))
+            
+        else:
+            df = fetch_era5_chunked(
+                center_lat=lat,
+                center_lon=lon,
+                start_date=start_date,
+                end_date=end_date,
+                config_file="./plam_sites/config.ini",
+                output_csv=output_path
+            )
         
         print("\nSample data (first 5 records):")
         print(df.head())

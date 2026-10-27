@@ -28,3 +28,13 @@ changelog.md
 *.sh
 *.csv
 run_diag.py
+*.ods
+run_diagnostics_all_sites.py
+run_diag_tot.py
+*.nsys-rep
+*.sqlite
+extract_fields_from_corine.py
+extract_buildings_from_lpis.py
+*.ods#
+lpis/
+era5_dataset/

@@ -10,6 +10,7 @@ import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend for headless environments
 from rasterio.transform import Affine
 from rasterio.mask import mask
+from scipy.ndimage import convolve
 from datetime import datetime, timedelta
 import math
 import time
@@ -272,18 +273,20 @@ with rasterio.open(corine_path) as src:
 #44: 523,230,242,255,255,Sea and ocean
 # Let's create a v_d table for different classes of land cover. 1.0 for anything foresty or woodland, 0.1 for agricultural and arable areas, 0.03 for grasslands and pastures, 0.1 for urban, and 0.01 for open water and rock
 v_d_table = {
-    "foresty": 1.0,
-    "agricultural": 0.1,
-    "grasslands": 0.03,
-    "urban": 0.1,
-    "open_water_rock": 0.01
+    "foresty": 1.5,
+    "agricultural": 1.0,
+    "grasslands": 1.0,
+    "urban": 0.7,
+    "bogs": 0.7,
+    "open_water_rock": 0.7  
 }
 z0_table = {
-    "foresty": 1.0,
-    "agricultural": 0.1,
-    "grasslands": 0.05,
-    "urban": 1.5,
-    "open_water_rock": 0.003
+    "foresty": 0.5,
+    "agricultural": 0.056,
+    "grasslands": 0.0360,
+    "urban": 1.0,
+    "bogs": 0.0184,
+    "open_water_rock": 0.0002
 }
 
 # Corine codes should be mapped to the v_d_table categories as follows:
@@ -297,6 +300,7 @@ z0_table = {
 # Agricultural: 11, 12, 13, 14
 # Grasslands: 21, 22
 # Urban: 11, 12
+# Bogs: 35, 36
 # Open water and rock: 40, 41, 42, 43, 44, 30, 31, 32, 33, 34
 # Map study_area_corine codes to v_d_table categories
 corine_to_v_d = {
@@ -316,7 +320,8 @@ corine_to_v_d = {
     11: "urban", 12: "urban",
     40: "open_water_rock", 41: "open_water_rock", 42: "open_water_rock", 43: "open_water_rock",
     44: "open_water_rock", 30: "open_water_rock", 31: "open_water_rock", 32: "open_water_rock",
-    33: "open_water_rock", 34: "open_water_rock"
+    33: "open_water_rock", 34: "open_water_rock", 
+    35: "bogs", 36: "bogs"
 }
 
 # Calculate a v_d map for the study area based on land cover types
@@ -332,6 +337,7 @@ for corine_code, area_fraction in study_area_corine.items():
     land_cover_type = corine_to_v_d.get(corine_code)
     if land_cover_type is not None:
         z0_map[study_area_corine == corine_code] = z0_table[land_cover_type]
+        
 nx = int((bounds[2] - bounds[0]) // GRID_RES)
 ny = int((bounds[3] - bounds[1]) // GRID_RES)
 # Reproject v_d and z0 maps to study's CRS and spatial resolution
@@ -456,7 +462,7 @@ emission_sources["area_m2"] = emission_sources.geometry.area
 emission_sources["is_point_source"] = _source_attr_bool_or_default(
     emission_sources, ["Point", "point", "is_point", "is_point_source"], False
 )
-emission_sources["emission_rate_gps_m2"] = _source_attr_or_default(emission_sources, ["e_r"], E_GPS_M2_BASE)
+emission_sources["emission_rate_gps_m2"] = _source_attr_or_default(emission_sources, ["e_r"], E_GPS_M2_BASE)*E_GPS_MULTIPLIER
 emission_sources["release_height_m"] = _source_attr_or_default(emission_sources, ["r_h"], RELEASE_HEIGHT_DEFAULT)
 emission_sources["release_velocity_m_s"] = _source_attr_or_default(emission_sources, ["release_velocity", "r_v"], RELEASE_VELOCITY_DEFAULT)
 emission_sources["seasonal_factor"] = _source_str_or_default(emission_sources, ["seasonal_factor", "seasonal_f"], "1.0 1.0 1.0 1.0")
@@ -556,7 +562,9 @@ nx = int((maxx - minx) // GRID_RES)
 ny = int((maxy - miny) // GRID_RES)
 
 # Adaptive particle mass based on an objective target: particles per grid cell per step
-total_emission = emission_sources["total_emission_gps"].sum()*E_GPS_MULTIPLIER
+total_emission = emission_sources["total_emission_gps"].sum()
+
+
 target_particles = max(1, int(PARTICLES_PER_CELL_TARGET * nx * ny))
 divisor = target_particles
 
@@ -619,6 +627,8 @@ if FLAT_SITE == 0:
     print(dem_transform)
 
 dem_array = np.float32(dem_array)
+# Smooth dem_array to reduce noise. Use a 3x3 uniform filter
+# dem_array = scipy.ndimage.uniform_filter(dem_array, size=5)
 # Downscale DEM to (nx, ny) matching simulation grid (easting, northing)
 # Rasterio gives dem_array as (rows=N→S, cols=W→E).
 # Zoom to (ny, nx), flip rows so axis-0 goes S→N, then transpose to (easting, northing).
@@ -627,11 +637,48 @@ dem_zoomed = scipy.ndimage.zoom(dem_array, (ny / dem_array.shape[0], nx / dem_ar
 dem_resized = dem_zoomed[::-1, :].T.copy()  # shape (nx, ny): [ix_east, iy_north]
 print(f"DEM resize (scipy.ndimage.zoom) time: {time.time()-t0:.2f} s")
 
-monthly_agl_top_m = 20
-surface_layer_max = max(1, int(math.ceil(monthly_agl_top_m / DZ)))
-ground_height_grid = dem_resized.astype(np.float32)
-# conc3d grid is now terrain-following (AGL), so ground is always at k=0
-ground_k_grid = np.zeros((nx, ny), dtype=np.int32)
+valid = (~np.ma.getmaskarray(dem_resized)) & np.isfinite(dem_resized)
+
+# Eight neighbouring cells; exclude the centre cell
+kernel = np.ones((3, 3), dtype=np.float64)
+kernel[1, 1] = 0
+
+# Calculate neighbourhood sums, excluding NoData cells
+z_valid = np.where(valid, dem_resized, 0)
+sum_z = convolve(z_valid, kernel, mode="constant", cval=0)
+sum_z2 = convolve(z_valid**2, kernel, mode="constant", cval=0)
+count = convolve(valid.astype(np.float64), kernel,
+                 mode="constant", cval=0)
+
+# Riley-style TRI: sqrt(sum((neighbour - centre)**2))
+tri_squared = sum_z2 - 2 * dem_resized* sum_z + count * dem_resized**2
+tri = np.sqrt(np.maximum(tri_squared, 0))
+
+# Exclude invalid centre cells and cells with no valid neighbours
+tri[~valid | (count == 0)] = np.nan
+
+#
+# 11 x 11 cells: approximately 1 km at 90 m resolution
+window = int(1000/GRID_RES)
+
+# Handle NoData without treating it as a real elevation
+z_max_input = np.where(valid, dem_resized, -np.inf)
+z_min_input = np.where(valid, dem_resized, np.inf)
+
+local_max = scipy.ndimage.maximum_filter(
+    z_max_input, size=window, mode="constant", cval=-np.inf
+)
+local_min = scipy.ndimage.minimum_filter(
+    z_min_input, size=window, mode="constant", cval=np.inf
+)
+
+valid_count = scipy.ndimage.uniform_filter(
+    valid.astype(float), size=window, mode="constant", cval=0
+) * window**2
+
+# Require at least 80% valid cells per window
+relief = local_max - local_min
+relief[~valid | (valid_count < 0.8 * window**2)] = np.nan
 
 # DEM metadata for kernel
 dem_nx = np.int32(nx)
@@ -646,7 +693,34 @@ dem_dy = np.float32(GRID_RES)
 dh_dy_grid, dh_dx_grid = np.gradient(dem_resized, GRID_RES)
 dh_dx_grid = dh_dx_grid.astype(np.float32)
 dh_dy_grid = dh_dy_grid.astype(np.float32)
-print(f"Terrain gradients: max |dh/dx|={np.abs(dh_dx_grid).max():.4f}, max |dh/dy|={np.abs(dh_dy_grid).max():.4f}")
+slope = np.degrees(np.sqrt(dh_dx_grid**2 + dh_dy_grid**2))
+
+print("Mean local relief:", np.nanmean(relief), "m")
+print("Median local relief:", np.nanmedian(relief), "m")
+print("95th percentile:", np.nanpercentile(relief, 95), "m")
+print(f"Max slope: {np.nanmax(slope):.4f}, Mean slope: {np.nanmean(slope):.4f}, Median slope: {np.nanmedian(slope):.4f}, Slope > 5 deg: {(np.nanmean(slope > 5))}, "
+      f"Slope > 15 deg: {(np.nanmean(slope > 15))}")
+print(f"Mean TRI: {np.nanmean(tri):.3f}")
+print(f"Median TRI: {np.nanmedian(tri):.3f}")
+
+# if FLAT_SITE == 0:
+#     dem_resized *= (np.nanmedian(relief)*(-0.00875) + 1.128)
+#     dem_array *= (np.nanmedian(relief)*(-0.00875) + 1.128)
+
+#     # Terrain gradient grids for channeling and orographic lifting
+#     # dh_dx[i,j] = dh/dx (easting slope), dh_dy[i,j] = dh/dy (northing slope)
+#     dh_dy_grid, dh_dx_grid = np.gradient(dem_resized, GRID_RES)
+#     dh_dx_grid = dh_dx_grid.astype(np.float32)
+#     dh_dy_grid = dh_dy_grid.astype(np.float32)
+#     slope = np.degrees(np.sqrt(dh_dx_grid**2 + dh_dy_grid**2))
+
+
+monthly_agl_top_m = MONTHLY_TOP
+surface_layer_max = max(1, int(math.ceil(monthly_agl_top_m / DZ)))
+ground_height_grid = dem_resized.astype(np.float32)
+# conc3d grid is now terrain-following (AGL), so ground is always at k=0
+ground_k_grid = np.zeros((nx, ny), dtype=np.int32)
+
 
 initial_release_vz = None
 
@@ -782,7 +856,7 @@ conc3d_blocks = (conc3d_total + threads - 1) // threads
 decay_blocks = (f_step + threads - 1) // threads
 
 # Average temperature during the study for reference
-temp_ref = temp_fine.mean()
+temp_ref = 15
 
 # Sampler location: use center of study area
 if sampler_x_env is not None and sampler_y_env is not None:
@@ -913,6 +987,7 @@ P_wet_dep_array = np.zeros(total_steps, dtype=np.float32)
 z_cap_array = np.zeros(total_steps, dtype=np.float32)
 thermal_wind_scale_array = np.zeros(total_steps, dtype=np.float32)
 emission_factor_array = np.zeros(total_steps, dtype=np.float32)
+bool_day_array = np.zeros(total_steps, dtype=np.int32)
 mean_temp = temp_fine.mean()
 print(f"Computing parameters for {total_steps} timesteps...")
 
@@ -933,7 +1008,10 @@ for step_counter in range(total_steps):
     Kxy_array[step_counter] = np.float32(
         calculate_kxy_with_stability(ustar, float(blh_fine[step_counter]), sshf=sshf_fine[step_counter], kxy_scale=KXY_SCALE)
     )
-    
+
+    hour_of_day = (step_counter // timesteps_per_hour) % 24
+    bool_day_array[step_counter] = 1 if 6 <= hour_of_day < 18 else 0
+
     # Height-dependent Kz (update every hour)
     if (step_counter % timesteps_per_hour) == 0 or step_counter == 0:
         z_heights, kz_profile = calculate_kz_profile_with_heatflux(
@@ -1045,8 +1123,8 @@ for step_counter in range(total_steps):
         return exp(t, A, lbda) * sine(t, omega, phi)
 
 
-    def _temperature_multiplier(sensitivity, temp_celsius, temp_reference, min_val=0.25, max_val=4.0):
-        multiplier = float(np.exp(float(sensitivity) * (float(temp_celsius) - float(temp_reference))))
+    def _temperature_multiplier(temp_celsius, temp_reference, min_val=0.25, max_val=10.0):
+        multiplier = 2**((float(temp_celsius) - float(temp_reference))/10)
         return float(np.clip(multiplier, min_val, max_val))
 
 
@@ -1054,11 +1132,10 @@ for step_counter in range(total_steps):
 
     if SEASONAL_PROFILE_MODE == "temperature":
         temp_factor = _temperature_multiplier(
-            TEMP_SENSITIVITY,
             temp_celsius,
             temp_ref,
             min_val=0.25,
-            max_val=5.0,
+            max_val=10.0,
         )
         emission_factor = temp_factor
 
@@ -1129,19 +1206,21 @@ d_z0_map = cuda.to_device(z0_map.astype(np.float16))
 #zero the concentration accumulator
 zero_3d_kernel[conc3d_blocks, threads](d_conc3d)
 
+current_season = None
 for global_step in range(total_steps):
     start = time.time()
 
     # Determine which season we are in for the current step
     current_month = (datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S") + timedelta(hours=global_step / timesteps_per_hour)).month
-    current_season = current_month % 12 // 3 + 1  # 1=Winter, 2=Spring, 3=Summer, 4=Fall
-    if unique_seasonal_factor_n > 1:
-        seasonal_factor_step = seasonal_factor_n[:, current_season - 1]
-    elif unique_seasonal_factor_n == 1 and seasonal_factor is not None:
-        seasonal_factor_step = np.full((total_particles,), seasonal_factor[current_season - 1], dtype=np.float16)
+    if current_season is None or current_season != current_month % 12 // 3 + 1:
+        current_season = current_month % 12 // 3 + 1  # 1=Winter, 2=Spring, 3=Summer, 4=Fall
+        if unique_seasonal_factor_n > 1:
+            seasonal_factor_step = seasonal_factor_n[:, current_season - 1]
+        elif unique_seasonal_factor_n == 1 and seasonal_factor is not None:
+            seasonal_factor_step = np.full((total_particles,), seasonal_factor[current_season - 1], dtype=np.float16)
+        # Copy the seasonal factor for the current step to the device
+        d_seasonal_factor_step = cuda.to_device(seasonal_factor_step.astype(np.float16))
 
-    # Copy the seasonal factor for the current step to the device
-    d_seasonal_factor_step = cuda.to_device(seasonal_factor_step.astype(np.float16))
     # Insert new row — positions and reset particle type to NH3
     fill_rows_and_reset_type_kernel[blocks, threads](
         d_x,
@@ -1187,7 +1266,8 @@ for global_step in range(total_steps):
     sshf = float(sshf_fine[global_step])
     d_temperature_celsius = cuda.to_device(temp_fine[global_step].astype(np.float32))
 
-
+    #d_bool_day = cuda.to_device(bool_day_array[global_step].astype(np.int32))
+    
     # Particle update (runs over j = 0..step_in_window)
     update_particles_3d_gpu_step(
         step_in_window,
@@ -1239,7 +1319,9 @@ for global_step in range(total_steps):
         d_dh_dy,
         d_initial_release_vz,
         d_seasonal_factor_step,
-        d_temperature_celsius
+        d_temperature_celsius,
+        #d_bool_day
+        #d_slope_5
     )
 
     # Apply exponential decay to all particle masses
@@ -1381,7 +1463,7 @@ for global_step in range(total_steps):
                 conc3d,
                 ground_height_grid,
                 DZ,
-                50,
+                monthly_agl_top_m,
             )
         
             fig, ax = plt.subplots(figsize=(8, 6))
@@ -1417,7 +1499,7 @@ for global_step in range(total_steps):
 
             cax = inset_axes(ax, width="5%", height="50%", loc="lower right", borderpad=1.0)
             cbar = fig.colorbar(im, cax=cax, orientation="vertical")
-            cbar.set_label(f"Avg ambient {species_label} ({species_unit})\n(0-50 m AGL mean)", fontsize=12, color="white", bbox=dict(facecolor='black', alpha=0.8, edgecolor='none', boxstyle='round,pad=0.3'))
+            cbar.set_label(f"Avg ambient {species_label} ({species_unit})\n(0-{monthly_agl_top_m} m AGL mean)", fontsize=12, color="white", bbox=dict(facecolor='black', alpha=0.8, edgecolor='none', boxstyle='round,pad=0.3'))
             cbar.ax.tick_params(labelsize=12, colors="white")
             
             cbar.ax.yaxis.set_ticks_position("left")
