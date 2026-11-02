@@ -38,3 +38,6 @@ extract_buildings_from_lpis.py
 *.ods#
 lpis/
 era5_dataset/
+.venv/
+Corine2024/
+*.xml
