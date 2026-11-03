@@ -23,9 +23,8 @@ def save_annual_agl_plots(
     vmax = float(np.nanpercentile(conc_plot, 99.0))
     if not np.isfinite(vmax) or vmax <= 0.0:
         vmax = 10.0
-
+    plt.style.use('dark_background')
     fig, ax = plt.subplots(figsize=(8, 6))
-    plt.style.use("dark_background")
     masked_grid = np.ma.masked_where(conc_plot.T <= 1e-6, conc_plot.T)
     im = ax.imshow(
         masked_grid,

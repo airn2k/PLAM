@@ -83,7 +83,6 @@ def update_particles_3d_kernel(
         local_ground_z = float(dem[ix_dem, iy_dem])
     z0  = float(z0_map[ix_dem, iy_dem]) if 0 <= ix_dem < dem_nx and 0 <= iy_dem < dem_ny else 0.0
     particle_height_agl = float(z[idx, k] - local_ground_z)
-    particle_height_agl = max(particle_height_agl, z0 * 1.01)   
 
     # Derived from Paulson, C. A. ‘The Mathematical Representation of Wind Speed and Temperature Profiles in the Unstable Atmospheric Surface Layer’.
     kappa = np.float32(0.4)  # von Karman constant
@@ -235,16 +234,18 @@ def update_particles_3d_kernel(
     
     if DEPOSITION_ENABLED == 1:
         if 0 <= ix_dem < dem_nx and 0 <= iy_dem < dem_ny:
-            v_d = float(v_d_map[ix_dem, iy_dem]) if 0 <= ix_dem < dem_nx and 0 <= iy_dem < dem_ny else 0.0
-            v_d_temp = float(v_d * (1.0 + 0.04 * (temp_particle_height_agl - 15.0)))
-            v_d_temp = max(0.01, min(0.05, v_d_temp))
-            H_raw = float(2*math.sqrt(Kz_low * dt))  # rough estimate of surface mixing layer height
-            H_min = float(0.2*blh)
-            H_max = float(120.0)
-            H = float(min(H_max, max(H_min, H_raw))*H_FACTOR)
-            P_dep_surf = np.float32(min(1.0, (v_d_temp * dt)/H))
+            v_d = float(v_d_map[ix_dem, iy_dem])
+            v_d = v_d/100.0
+            #v_d_temp = float(v_d * (1.0 + 0.04 * (temp_particle_height_agl - 15.0)))
+            #v_d_temp = max(0.002, min(0.05, v_d_temp))
+            H_raw = float(math.sqrt(2* Kz_low * dt))  # rough estimate of surface mixing layer height
+            H = float(H_raw*H_FACTOR)
+            P_dep_surf = np.float32(
+                1.0 - math.exp(-v_d * dt / H)
+            )
             z_dem = dem[ix_dem, iy_dem]
-            if z[idx, k] < z_dem: 
+            
+            if z[idx, k] < (z_dem+H): 
                 P_dep = P_dep_surf if particle_type[idx, k] == 0 else P_dep_nh4
                 if xoroshiro128p_uniform_float32(rng_states, k) <= P_dep:
                     ix = int(math.floor(x[idx, k] / GRID_RES) - math.floor(minx / GRID_RES))
@@ -257,32 +258,35 @@ def update_particles_3d_kernel(
                     y[idx, k] = SENTINEL
                     z[idx, k] = SENTINEL
                     return
-                else:
-                    # Inelastic rebound from penetration depth (momentum proxy from this step)
-                    penetration = z_dem - z[idx, k]
-                    if penetration < 0.0:
-                        penetration = 0.0
 
-                    # e=1 mirrors depth exactly; e<1 damps rebound near the surface.
-                    restitution = 0.35
-                    z_new = z_dem + restitution * penetration
-                    z_floor = z_dem + z0
-                    if z_new < z_floor:
-                        z_new = z_floor
-                    z[idx, k] = z_new
+            if P_wet_dep > 0.0:
+                if xoroshiro128p_uniform_float32(rng_states, k) <= P_wet_dep:
+                    ix = int(math.floor(x[idx, k] / GRID_RES) - math.floor(minx / GRID_RES))
+                    iy = int(math.floor(y[idx, k] / GRID_RES) - math.floor(miny / GRID_RES))
+                    add_mass = particle_mass_g[idx]*seasonal_factor_step[k]
+                    if 0 <= ix < nx and 0 <= iy < ny:
+                        cuda.atomic.add(depo_grid, (ix, iy), add_mass)
+                    cuda.atomic.add(mass_budget, MASS_BUDGET_WET_DEP, add_mass)
+                    x[idx, k] = SENTINEL
+                    y[idx, k] = SENTINEL
+                    z[idx, k] = SENTINEL
+                    return
+                    
+            if z[idx, k] < z_dem:
+                # Inelastic rebound from penetration depth (momentum proxy from this step)
+                penetration = z_dem - z[idx, k]
+                if penetration < 0.0:
+                    penetration = 0.0
 
-        if P_wet_dep > 0.0:
-            if xoroshiro128p_uniform_float32(rng_states, k) <= P_wet_dep:
-                ix = int(math.floor(x[idx, k] / GRID_RES) - math.floor(minx / GRID_RES))
-                iy = int(math.floor(y[idx, k] / GRID_RES) - math.floor(miny / GRID_RES))
-                add_mass = particle_mass_g[idx]*seasonal_factor_step[k]
-                if 0 <= ix < nx and 0 <= iy < ny:
-                    cuda.atomic.add(depo_grid, (ix, iy), add_mass)
-                cuda.atomic.add(mass_budget, MASS_BUDGET_WET_DEP, add_mass)
-                x[idx, k] = SENTINEL
-                y[idx, k] = SENTINEL
-                z[idx, k] = SENTINEL
-                return
+                # e=1 mirrors depth exactly; e<1 damps rebound near the surface.
+                restitution = 0.35
+                z_new = z_dem + restitution * penetration
+                z_floor = z_dem + z0
+                if z_new < z_floor:
+                    z_new = z_floor
+                z[idx, k] = z_new
+
+
     else:
         z_dem = dem[ix_dem, iy_dem]
         if z[idx, k] < z_dem:

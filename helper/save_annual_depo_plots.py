@@ -12,17 +12,27 @@ def save_annual_depo_plots(
     miny_3857,
     maxy_3857,
     species_label,
-    species_unit_depo
+    species_unit_depo,
+    grid_res
 ):
     """Save annual deposition plots and GeoTIFFs."""
     annual_dir = os.path.join(output_dir, "annual_depo_plots")
     os.makedirs(annual_dir, exist_ok=True)
 
     depo = np.asarray(annual_depo, dtype=np.float64)
+    nh3_to_n = 14.007 / 17.031
+    cell_area_m2 = grid_res*grid_res
+    depo = (depo
+                 * nh3_to_n            # microg NH3 → microg N
+                 / 1000000000.0              # microg → kg
+                 * (10000.0 / cell_area_m2)  # per cell → per ha
+                 * 12)  # sim period → year
+
+
     vmax = float(np.nanpercentile(depo, 99.0))
     if not np.isfinite(vmax) or vmax <= 0.0:
         vmax = 1.0
-
+    plt.style.use('dark_background')
     fig, ax = plt.subplots(figsize=(8, 6))
     plt.style.use("dark_background")
     masked_grid = np.ma.masked_where(depo.T <= 1e-6, depo.T)

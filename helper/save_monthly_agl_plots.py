@@ -27,14 +27,14 @@ def save_monthly_agl_plots(
         vmax = float(np.nanpercentile(conc_plot, 98.0))
         if not np.isfinite(vmax) or vmax <= 0.0:
             vmax = 10.0
-
+        plt.style.use('dark_background')
         fig, ax = plt.subplots(figsize=(8, 6))
         plt.style.use("dark_background")
         masked_grid = np.ma.masked_where(conc_plot.T <= 1e-6, conc_plot.T)
         im = ax.imshow(
             masked_grid,
             origin="lower",
-            cmap="hot",
+            cmap="winter",
             extent=[minx_3857, maxx_3857, miny_3857, maxy_3857],
             zorder=1,
             alpha=0.8,

@@ -45,6 +45,8 @@ from helper.save_annual_agl_plots import save_annual_agl_plots
 from helper.save_annual_depo_plots import save_annual_depo_plots
 from helper.agl_band_mean_weighted import agl_band_mean_weighted
 from helper.hillshade import hillshade
+from helper.vertical_profile_mean import vertical_profile_mean 
+from helper.save_monthly_vertical_plots import save_monthly_vertical_plots
 
 # Import atmospheric calculators
 from atmosphere.calculate_kxy_with_stability import calculate_kxy_with_stability
@@ -221,56 +223,12 @@ with rasterio.open(corine_path) as src:
     out_meta = src.meta.copy()
     
     # Get the data
-    data = out_image[0]
+    corine_data = out_image[0].data.copy()
     
-    print(f"Raster shape: {data.shape}")
-    print(f"Unique values in study area: {np.unique(data[~data.mask])}")  # Show all values
+    print(f"Raster shape: {corine_data.shape}")
+    #print(f"Unique values in study area: {np.unique(corine_data[~corine_data.mask])}")  # Show all values
 
-# Corine codes in this raster appear to be simplified (1-44 instead of 111-523)
-#1: 111,230,0,77,255,Continuous urban fabric
-#2: 112,255,0,0,255,Discontinuous urban fabric
-#3: 121,204,77,242,255,Industrial or commercial units
-#4: 122,204,0,0,255,Road and rail networks and associated land
-#5: 123,230,204,204,255,Port areas
-#6: 124,230,204,230,255,Airports
-#7: 131,166,0,204,255,Mineral extraction sites
-#8: 132,166,77,0,255,Dump sites
-#9: 133,255,77,255,255,Construction sites
-#10: 141,255,166,255,255,Green urban areas
-#11: 142,255,230,255,255,Sport and leisure facilities
-#12: 211,255,255,168,255,Non-irrigated arable land
-#13: 212,255,255,0,255,Permanently irrigated land
-#14: 213,230,230,0,255,Rice fields
-#15: 221,230,128,0,255,Vineyards
-#16: 222,242,166,77,255,Fruit trees and berry plantations
-#17: 223,230,166,0,255,Olive groves
-#18: 231,230,230,77,255,Pastures
-#19: 241,255,230,166,255,Annual crops associated with permanent crops
-#20: 242,255,230,77,255,Complex cultivation patterns
-#21: 243,230,204,77,255,Land principally occupied by agriculture with significant areas of natural vegetation
-#22: 244,242,204,166,255,Agro-forestry areas
-#23: 311,128,255,0,255,Broad-leaved forest
-#24: 312,0,166,0,255,Coniferous forest
-#25: 313,77,255,0,255,Mixed forest
-#26: 321,204,242,77,255,Natural grasslands
-#27: 322,166,255,128,255,Moors and heathland
-#28: 323,166,230,77,255,Sclerophyllous vegetation
-#29: 324,166,242,0,255,Transitional woodland-shrub
-#30: 331,230,230,230,255,Beaches dunes sands
-#31: 332,204,204,204,255,Bare rocks
-#32: 333,204,255,204,255,Sparsely vegetated areas
-#33: 334,0,0,0,255,Burnt areas
-#34: 335,166,230,204,255,Glaciers and perpetual snow
-#35: 411,166,166,255,255,Inland marshes
-#36: 412,77,77,255,255,Peat bogs
-#37: 421,204,204,255,255,Salt marshes
-#38: 422,230,230,255,255,Salines
-#39: 423,166,166,230,255,Intertidal flats
-#40: 511,0,204,242,255,Water courses
-#41: 512,128,242,230,255,Water bodies
-#42: 521,0,255,166,255,Coastal lagoons
-#43: 522,166,255,230,255,Estuaries
-#44: 523,230,242,255,255,Sea and ocean
+
 # Let's create a v_d table for different classes of land cover. 1.0 for anything foresty or woodland, 0.1 for agricultural and arable areas, 0.03 for grasslands and pastures, 0.1 for urban, and 0.01 for open water and rock
 v_d_table = {
     "foresty": 1.5,
@@ -289,55 +247,32 @@ z0_table = {
     "open_water_rock": 0.0002
 }
 
-# Corine codes should be mapped to the v_d_table categories as follows:
-# Foresty: 311, 312, 313, 314, 321, 322, 323, 324
-# Agricultural: 111, 112, 121, 122, 123, 124, 131, 132, 133, 141, 142, 143
-# Grasslands: 211, 212, 221, 222
-# Urban: 111, 112, 121, 122, 123, 124
-# Open water and rock: 511, 512, 521, 522, 523, 331, 332, 333, 334, 335
-# And also in 1-44 numbers:
-# Foresty: 30, 31, 32, 33, 34
-# Agricultural: 11, 12, 13, 14
-# Grasslands: 21, 22
-# Urban: 11, 12
-# Bogs: 35, 36
-# Open water and rock: 40, 41, 42, 43, 44, 30, 31, 32, 33, 34
 # Map study_area_corine codes to v_d_table categories
 corine_to_v_d = {
-    311: "foresty", 312: "foresty", 313: "foresty", 314: "foresty",
-    321: "foresty", 322: "foresty", 323: "foresty", 324: "foresty",
-    111: "agricultural", 112: "agricultural", 121: "agricultural", 122: "agricultural",
-    123: "agricultural", 124: "agricultural", 131: "agricultural", 132: "agricultural",
-    133: "agricultural", 141: "agricultural", 142: "agricultural", 143: "agricultural",
-    211: "grasslands", 212: "grasslands", 221: "grasslands", 222: "grasslands",
-    111: "urban", 112: "urban", 121: "urban", 122: "urban", 123: "urban", 124: "urban",
-    511: "open_water_rock", 512: "open_water_rock", 521: "open_water_rock", 522: "open_water_rock",
-    523: "open_water_rock", 331: "open_water_rock", 332: "open_water_rock", 333: "open_water_rock",
-    334: "open_water_rock", 335: "open_water_rock",
-    30: "foresty", 31: "foresty", 32: "foresty", 33: "foresty", 34: "foresty",
-    11: "agricultural", 12: "agricultural", 13: "agricultural", 14: "agricultural",
-    21: "grasslands", 22: "grasslands",
-    11: "urban", 12: "urban",
-    40: "open_water_rock", 41: "open_water_rock", 42: "open_water_rock", 43: "open_water_rock",
-    44: "open_water_rock", 30: "open_water_rock", 31: "open_water_rock", 32: "open_water_rock",
-    33: "open_water_rock", 34: "open_water_rock", 
-    35: "bogs", 36: "bogs"
-}
+    1: "urban", 2: "urban", 3: "urban", 4: "urban", 5: "urban", 6: "urban", 7: "urban", 8: "urban", 9: "urban", 10: "urban", 11: "urban", 
+    12: "agricultural", 13: "agricultural", 14: "agricultural", 15: "agricultural", 16: "agricultural", 17: "agricultural",
+    18: "grasslands", 19: "agricultural", 20: "agricultural", 21: "agricultural", 22: "foresty", 23: "foresty",
+    24: "foresty", 25: "foresty", 26: "grasslands", 27: "grasslands", 28: "grasslands", 29: "grasslands",
+    30: "open_water_rock", 31: "open_water_rock", 32: "open_water_rock", 33: "open_water_rock", 34: "open_water_rock",
+    35: "bogs", 36: "bogs", 37: "bogs", 38: "bogs", 39: "bogs",
+    40: "open_water_rock", 41: "open_water_rock", 42: "open_water_rock", 43: "open_water_rock", 44: "open_water_rock"}
 
+z0_map = np.zeros_like(corine_data, dtype=float)
+v_d_map = np.zeros_like(corine_data, dtype=float)
 # Calculate a v_d map for the study area based on land cover types
-v_d_map = np.zeros_like(study_area_corine, dtype=float)
-for corine_code, area_fraction in study_area_corine.items():
-    land_cover_type = corine_to_v_d.get(corine_code)
-    if land_cover_type is not None:
-        v_d_map[study_area_corine == corine_code] = v_d_table[land_cover_type]
+for i in range(corine_data.shape[0]):
+    for j in range(corine_data.shape[1]):
+        z0_map[i,j]=z0_table[corine_to_v_d[corine_data[i,j]]]
+        v_d_map[i,j]=v_d_table[corine_to_v_d[corine_data[i,j]]]
 
-# Calculate a z0 map for the study area based on land cover types
-z0_map = np.zeros_like(study_area_corine, dtype=float)
-for corine_code, area_fraction in study_area_corine.items():
-    land_cover_type = corine_to_v_d.get(corine_code)
-    if land_cover_type is not None:
-        z0_map[study_area_corine == corine_code] = z0_table[land_cover_type]
-        
+
+# # Calculate a z0 map for the study area based on land cover types
+# z0_map = np.zeros_like(study_area_corine, dtype=float)
+# for corine_code, area_fraction in study_area_corine.items():
+#     land_cover_type = corine_to_v_d.get(corine_code)
+#     if land_cover_type is not None:
+#         z0_map[study_area_corine == corine_code] = z0_table[land_cover_type]
+
 nx = int((bounds[2] - bounds[0]) // GRID_RES)
 ny = int((bounds[3] - bounds[1]) // GRID_RES)
 # Reproject v_d and z0 maps to study's CRS and spatial resolution
@@ -583,8 +518,10 @@ print(f"Ring buffer window: {f_step} steps (~{f_step * 60.0 / timesteps_per_hour
 # 3D vertical grid
 nz = int(np.ceil(Z_MAX / DZ))
 
+# Caclulate background deposition
+depo_back = BASE_CONCENTRATION*(v_d_map/100)*total_hours*3600*GRID_RES*GRID_RES
 # Accumulators
-depo_grid = np.zeros((nx, ny), dtype=np.float32)
+depo_grid = np.float32(depo_back)
 conc3d = np.zeros((nx, ny, nz))
 
 # =========================
@@ -1198,6 +1135,7 @@ else:
 os.makedirs(os.path.join(output_dir, 'simulation_frames3d'), exist_ok=True)
 
 monthly_surface_sum = {}
+monthly_vertical_sum = {}
 monthly_surface_counts = {}
 monthly_surface_sum_depo = {} if DEPOSITION_ENABLED else None
 hourly_agl_collection = [] if HOURLY_MAPS == 1 else None
@@ -1371,6 +1309,7 @@ for global_step in range(total_steps):
         
         # Take average based on sampling interval
         conc3d = conc3d/sample_interval
+        conc3d += BASE_CONCENTRATION
         minutes_per_step = 60.0 / timesteps_per_hour
         total_minutes = global_step * minutes_per_step
         hours_i = int(total_minutes // 60)
@@ -1392,13 +1331,16 @@ for global_step in range(total_steps):
         month_key = sample_datetime.strftime('%Y-%m')
         previous_month_key = (sample_datetime - relativedelta(months=1)).strftime("%Y-%m")
 
-        col_avg_monthly = agl_band_mean_weighted(conc3d, ground_height_grid, DZ, monthly_agl_top_m)
+        col_avg_monthly = agl_band_mean_weighted(conc3d, ground_height_grid, DZ, monthly_agl_top_m) 
+        vertical_avg_monthly = vertical_profile_mean(conc3d,4,'x')
         if month_key not in monthly_surface_sum:
             monthly_surface_sum[month_key] = np.zeros((nx, ny), dtype=np.float64)
+            monthly_vertical_sum[month_key] = np.zeros((nx, nz), dtype=np.float64)
             if DEPOSITION_ENABLED:
                 monthly_surface_sum_depo[month_key] = depo_grid.astype(np.float64)
             monthly_surface_counts[month_key] = 0
         monthly_surface_sum[month_key] += col_avg_monthly.astype(np.float64)
+        monthly_vertical_sum[month_key] += vertical_avg_monthly.astype(np.float64)
         if DEPOSITION_ENABLED:
             try:
                 monthly_surface_sum_depo[month_key] = monthly_surface_sum_depo[previous_month_key] - depo_grid.astype(np.float64)
@@ -1687,22 +1629,27 @@ if monthly_surface_sum:
             miny_3857,
             maxy_3857,
             species_label,
-            species_unit_depo
+            species_unit_depo,
+            GRID_RES
         )
 else:
     print("No monthly concentration samples were collected; monthly AGL plots were not generated.")
 
-
-if DEPOSITION_ENABLED:
-    save_annual_depo_plots(
-        depo_grid,
+if monthly_vertical_sum:
+        save_monthly_vertical_plots(
+        monthly_vertical_sum,
+        monthly_surface_counts,
         output_dir,
         minx_3857,
         maxx_3857,
-        miny_3857,
-        maxy_3857,
+        DZ,
+        Z_MAX,
+        Z_OF_INTEREST,
+        RECEPTOR_VERTICAL_RAD,
         species_label,
-        species_unit_depo
+        species_unit,
+        GRID_RES,
+        ground_height_grid
     )
 
 if HOURLY_MAPS == 1:
