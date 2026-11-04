@@ -1630,7 +1630,8 @@ if monthly_surface_sum:
             maxy_3857,
             species_label,
             species_unit_depo,
-            GRID_RES
+            GRID_RES,
+            total_hours
         )
 else:
     print("No monthly concentration samples were collected; monthly AGL plots were not generated.")

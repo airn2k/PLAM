@@ -13,7 +13,8 @@ def save_annual_depo_plots(
     maxy_3857,
     species_label,
     species_unit_depo,
-    grid_res
+    grid_res,
+    total_hours
 ):
     """Save annual deposition plots and GeoTIFFs."""
     annual_dir = os.path.join(output_dir, "annual_depo_plots")
@@ -26,7 +27,7 @@ def save_annual_depo_plots(
                  * nh3_to_n            # microg NH3 → microg N
                  / 1000000000.0              # microg → kg
                  * (10000.0 / cell_area_m2)  # per cell → per ha
-                 * 12)  # sim period → year
+                 * (365.25*24/total_hours))  # sim period → year
 
 
     vmax = float(np.nanpercentile(depo, 99.0))
