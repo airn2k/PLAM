@@ -1,6 +1,8 @@
-from gpu_model.fill_rows_and_reset_type_kernel import fill_rows_and_reset_type_kernel
 import numpy as np
 from numba import cuda
+
+from gpu_model.fill_rows_and_reset_type_kernel import fill_rows_and_reset_type_kernel
+
 
 def test_fill_rows_and_reset_type_kernel():
     # Test case 1:
@@ -23,17 +25,20 @@ def test_fill_rows_and_reset_type_kernel():
     d_particle_mass_g = cuda.to_device(particle_mass_g)
     d_mass_budget = cuda.to_device(mass_budget)
 
-
     f_step = 4
     blocks = (f_step + threads - 1) // threads
-    fill_rows_and_reset_type_kernel[blocks, threads](d_x, d_y, d_z,
-                                                     d_particle_type,
-                                                     d_particle_mass_g,
-                                                     d_mass_budget,
-                                                     np.int32(row),
-                                                     xval,
-                                                     yval,
-                                                     zval)
+    fill_rows_and_reset_type_kernel[blocks, threads](
+        d_x,
+        d_y,
+        d_z,
+        d_particle_type,
+        d_particle_mass_g,
+        d_mass_budget,
+        np.int32(row),
+        xval,
+        yval,
+        zval,
+    )
 
     c_x = d_x.copy_to_host()
     c_y = d_y.copy_to_host()

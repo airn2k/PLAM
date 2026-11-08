@@ -1,4 +1,3 @@
-
 def estimate_gpu_memory_usage(n_particles, f_step, n_arrays=5, extra_bytes=0):
     """
     Estimate GPU memory usage for main particle arrays.
@@ -11,4 +10,3 @@ def estimate_gpu_memory_usage(n_particles, f_step, n_arrays=5, extra_bytes=0):
     mb = total_bytes / (1024**2)
     gb = total_bytes / (1024**3)
     return total_bytes, mb, gb
-

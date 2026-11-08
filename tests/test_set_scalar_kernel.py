@@ -1,6 +1,8 @@
-from gpu_model.set_scalar_kernel import set_scalar_kernel
 import numpy as np
 from numba import cuda
+
+from gpu_model.set_scalar_kernel import set_scalar_kernel
+
 
 def test_set_scalar_kernel():
     # Test case 1:

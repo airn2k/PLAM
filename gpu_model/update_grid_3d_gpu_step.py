@@ -1,5 +1,8 @@
-from gpu_model.update_grid_3d_kernel import update_grid_3d_kernel
 import numpy as np
+
+from gpu_model.update_grid_3d_kernel import update_grid_3d_kernel
+
+
 def update_grid_3d_gpu_step(
     step,
     head,
@@ -21,7 +24,7 @@ def update_grid_3d_gpu_step(
     include_nh4,
     d_dem,
     threads=256,
-    seasonal_factor_step=None
+    seasonal_factor_step=None,
 ):
     n_part = d_x.shape[1]
     if step < 0 or n_part <= 0:
@@ -48,5 +51,5 @@ def update_grid_3d_gpu_step(
         nz,
         np.int32(int(include_nh4)),
         d_dem,
-        seasonal_factor_step
+        seasonal_factor_step,
     )

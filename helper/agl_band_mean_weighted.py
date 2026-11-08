@@ -1,6 +1,7 @@
 import numpy as np
 from numba import njit, prange
 
+
 @njit(parallel=True)
 def agl_band_mean_weighted(conc3d, ground_height_grid, dz, agl_top_m):
     nz = conc3d.shape[2]

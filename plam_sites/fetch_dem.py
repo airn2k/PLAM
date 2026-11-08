@@ -1,17 +1,18 @@
 # This script fetches DEM data for all sites in the sites/ directory. Not essential to run, but useful for warming up the cache
 import os
-import requests
-import rasterio
-from plam_sites.site_config import SiteConfig
+
 import geopandas as gpd
-from pyproj import Transformer
-from osgeo import gdal
+import rasterio
 from bmi_topography import Topography
-from bmi_topography import api_key
-import sys
+from osgeo import gdal
+from pyproj import Transformer
+
+from plam_sites.site_config import SiteConfig
 
 
-def fetch_and_load_dem(minx, miny, maxx, maxy, crs_src, dem_dir="dem_map", output_filename=None):
+def fetch_and_load_dem(
+    minx, miny, maxx, maxy, crs_src, dem_dir="dem_map", output_filename=None
+):
     """
     Fetch and load DEM for the given extents and CRS.
     Returns (dem_array, transform) for sampling heights.
@@ -38,14 +39,18 @@ def fetch_and_load_dem(minx, miny, maxx, maxy, crs_src, dem_dir="dem_map", outpu
     params["west"] = lon_min
     params["east"] = lon_max
     params["cache_dir"] = cache_dir
-    params["dem_type"] = 'COP30'  # Use SRTMGL1 for higher resolution.must be one of ('SRTMGL3', 'SRTMGL1', 'SRTMGL1_E', 'AW3D30', 'AW3D30_E', 'SRTM15Plus', 'NASADEM', 'COP30', 'COP90', 'EU_DTM', 'GEDI_L3', 'GEBCOIceTopo', 'GEBCOSubIceTopo', 'CA_MRDEM_DSM', 'CA_MRDEM_DTM', 'USGS30m', 'USGS10m', 'USGS1m').
+    params["dem_type"] = (
+        "COP30"  # Use SRTMGL1 for higher resolution.must be one of ('SRTMGL3', 'SRTMGL1', 'SRTMGL1_E', 'AW3D30', 'AW3D30_E', 'SRTM15Plus', 'NASADEM', 'COP30', 'COP90', 'EU_DTM', 'GEDI_L3', 'GEBCOIceTopo', 'GEBCOSubIceTopo', 'CA_MRDEM_DSM', 'CA_MRDEM_DTM', 'USGS30m', 'USGS10m', 'USGS1m').
+    )
     topo = Topography(**params)
     topo.fetch()
 
     # Uncompress and translate DEM
     files = os.listdir(cache_dir)
-    gdal.Translate(temp_path, os.path.join(cache_dir, files[0]), creationOptions=['COMPRESS=NONE'])
-    
+    gdal.Translate(
+        temp_path, os.path.join(cache_dir, files[0]), creationOptions=["COMPRESS=NONE"]
+    )
+
     # Translate to final output with proper CRS
     gdal.Translate(output_path, temp_path)
 
@@ -60,11 +65,13 @@ def fetch_and_load_dem(minx, miny, maxx, maxy, crs_src, dem_dir="dem_map", outpu
     if os.path.exists(temp_path):
         os.remove(temp_path)
 
+
 ITM_EPSG = "EPSG:2157"
-crs_src=ITM_EPSG
+crs_src = ITM_EPSG
+
 
 def fetch_dem():
-# Loop through each site directory and fetch the DEM data
+    # Loop through each site directory and fetch the DEM data
     site = SiteConfig.get_current_site()
     # Replace with the actual DEM URL pattern
     gdf = gpd.read_file(site.study_rectangle)
@@ -74,8 +81,11 @@ def fetch_dem():
     dem_path = os.path.join(site.dem_dir, f"dem_trans_{abs(dem_hash)}.tiff")
 
     fetch_and_load_dem(
-        bounds[0], bounds[1], bounds[2], bounds[3],
+        bounds[0],
+        bounds[1],
+        bounds[2],
+        bounds[3],
         crs_src=ITM_EPSG,
         dem_dir=site.dem_dir,
-        output_filename=dem_path
+        output_filename=dem_path,
     )

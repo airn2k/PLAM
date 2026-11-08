@@ -1,10 +1,14 @@
-from numba import cuda
-from config.params import *
-import numpy as np
 import math
-from numba.cuda.random import (create_xoroshiro128p_states,
-                                       xoroshiro128p_normal_float32,
-                                       xoroshiro128p_uniform_float32)
+
+import numpy as np
+from numba import cuda
+from numba.cuda.random import (
+    xoroshiro128p_normal_float32,
+    xoroshiro128p_uniform_float32,
+)
+
+from config.params import *
+
 
 @cuda.jit
 def update_particles_3d_kernel(
@@ -14,18 +18,18 @@ def update_particles_3d_kernel(
     particle_type,  # (f_step, n_part) int32, 0=NH3, 1=NH4+
     u_ref,
     v_ref,
-    z_ref,       # Reference height for wind (typically 10m)
-    z0_map,          # Roughness length
-    blh,         # Boundary layer height
+    z_ref,  # Reference height for wind (typically 10m)
+    z0_map,  # Roughness length
+    blh,  # Boundary layer height
     Kxy,
-    Kz_low,      # Kz for near-surface (0-100m)
-    Kz_mid,      # Kz for mid-level (100-500m) 
-    Kz_high,     # Kz for upper level (>500m)
+    Kz_low,  # Kz for near-surface (0-100m)
+    Kz_mid,  # Kz for mid-level (100-500m)
+    Kz_high,  # Kz for upper level (>500m)
     dt,  # scalars
     v_d_map,  # v_d_map (deposition velocity map)
-    P_dep_nh4,   # Deposition probability for NH4+
+    P_dep_nh4,  # Deposition probability for NH4+
     P_conversion,  # NH3→NH4+ conversion probability
-    P_wet_dep,   # Wet deposition probability
+    P_wet_dep,  # Wet deposition probability
     w_mean,
     w_settle,  # scalars
     particle_mass_g,  # (f_step,) float32
@@ -39,8 +43,8 @@ def update_particles_3d_kernel(
     z_cap,  # scalar
     rng_states,  # RNG state per thread
     step_in_window,  # number of valid time-slices minus 1
-    head,            # ring-buffer head pointer
-    f_step_param,    # ring-buffer length
+    head,  # ring-buffer head pointer
+    f_step_param,  # ring-buffer length
     dem,  # (nx, ny) float32, DEM heights
     dem_nx,
     dem_ny,
@@ -51,17 +55,17 @@ def update_particles_3d_kernel(
     dh_dx_grid,  # (nx, ny) float32, terrain gradient in easting
     dh_dy_grid,  # (nx, ny) float32, terrain gradient in northing
     mass_budget,  # [dry_dep, wet_dep, oob_horizontal, oob_vertical, aged_out] mass totals (g)
-    chan_alpha,   # channeling strength (0=off)
-    chan_z_top,   # channeling height ceiling AGL (m)
+    chan_alpha,  # channeling strength (0=off)
+    chan_z_top,  # channeling height ceiling AGL (m)
     chan_slope_ref,  # reference slope for channeling weight
-    oro_alpha,    # orographic lifting strength (0=off)
-    oro_z_top,    # orographic lifting height ceiling AGL (m)
-    sshf,         # surface sensible heat flux (W/m²)
-    release_vz,         # (n_part,) float32 initial vertical velocity for newly emitted particles
+    oro_alpha,  # orographic lifting strength (0=off)
+    oro_z_top,  # orographic lifting height ceiling AGL (m)
+    sshf,  # surface sensible heat flux (W/m²)
+    release_vz,  # (n_part,) float32 initial vertical velocity for newly emitted particles
     seasonal_factor_step,  # (n_part,) float32 seasonal factor for each particle
     temperature_celsius,  # (n_part,) float32 temperature for each particle
-    #bool_day  # (n_part,) int32, 1=day, 0=night
-    #slope_5  # scalar float32 representing the fraction of slope > 5 degrees
+    # bool_day  # (n_part,) int32, 1=day, 0=night
+    # slope_5  # scalar float32 representing the fraction of slope > 5 degrees
 ):
     j = cuda.blockIdx.x
     k = cuda.threadIdx.x + cuda.blockDim.x * cuda.blockIdx.y
@@ -81,37 +85,46 @@ def update_particles_3d_kernel(
     local_ground_z = 0.0
     if 0 <= ix_dem < dem_nx and 0 <= iy_dem < dem_ny:
         local_ground_z = float(dem[ix_dem, iy_dem])
-    z0  = float(z0_map[ix_dem, iy_dem]) if 0 <= ix_dem < dem_nx and 0 <= iy_dem < dem_ny else 0.0
+    z0 = (
+        float(z0_map[ix_dem, iy_dem])
+        if 0 <= ix_dem < dem_nx and 0 <= iy_dem < dem_ny
+        else 0.0
+    )
     particle_height_agl = float(z[idx, k] - local_ground_z)
 
     # Derived from Paulson, C. A. ‘The Mathematical Representation of Wind Speed and Temperature Profiles in the Unstable Atmospheric Surface Layer’.
     kappa = np.float32(0.4)  # von Karman constant
     g = np.float32(9.81)
-    
+
     # Calculate Monin-Obukhov length for stability
-    wind_speed_ref = math.sqrt(u_ref*u_ref + v_ref*v_ref)
-    ustar = (kappa * wind_speed_ref) / math.log(z_ref/z0)
+    wind_speed_ref = math.sqrt(u_ref * u_ref + v_ref * v_ref)
+    ustar = (kappa * wind_speed_ref) / math.log(z_ref / z0)
     # Temperature gradient along the vertical between n-1 and n+1 layers
     lapse_rate = 6.5 / 1000  # Convert to K/m
     temp_particle_height_agl = temperature_celsius - lapse_rate * particle_height_agl
 
-    H_kinematic = sshf/ (1.225 * 1005)  # Convert to kinematic units
+    H_kinematic = sshf / (1.225 * 1005)  # Convert to kinematic units
     if math.fabs(H_kinematic) > 1e-6:
-        L_MO = -(ustar*ustar*ustar) / (kappa * g * H_kinematic)
+        L_MO = -(ustar * ustar * ustar) / (kappa * g * H_kinematic)
         L_MO = max(min(L_MO, 10000), -10000)
     else:
         L_MO = 1e6  # Neutral
-    
+
     # Stability functions
     def psi_m_profile(zeta):
         zeta = max(min(zeta, 2.0), -2.0)
         if zeta > 0:  # Stable
             return -5 * zeta
         elif zeta < 0:  # Unstable
-            x = (1 - 16 * zeta)**0.25
-            return 2*math.log((1+x)/2) + math.log((1+x**2)/2) - 2*math.atan(x) + math.pi/2
+            x = (1 - 16 * zeta) ** 0.25
+            return (
+                2 * math.log((1 + x) / 2)
+                + math.log((1 + x**2) / 2)
+                - 2 * math.atan(x)
+                + math.pi / 2
+            )
         return 0.0
-    
+
     # Calculate wind speed ratio using log profile with stability
     if particle_height_agl > 20:
         if particle_height_agl < blh:
@@ -120,9 +133,11 @@ def update_particles_3d_kernel(
 
             log_term = math.log(particle_height_agl / z_ref)
             stability_correction = psi_m_profile(zeta_z) - psi_m_profile(zeta_ref)
-            
+
             # Wind speed ratio
-            wind_ratio = (math.log(particle_height_agl / z0) + stability_correction) / (math.log(z_ref / z0) + psi_m_profile(zeta_ref))
+            wind_ratio = (math.log(particle_height_agl / z0) + stability_correction) / (
+                math.log(z_ref / z0) + psi_m_profile(zeta_ref)
+            )
             # Prevent extreme values
             wind_ratio = max(min(wind_ratio, 3.0), 0.1)  # Prevent extreme values
         else:
@@ -132,10 +147,9 @@ def update_particles_3d_kernel(
     else:
         # Below 20 meters, assume wind ratio is 1
         wind_ratio = 1.0
-        
+
     u_z = u_ref * wind_ratio
     v_z = v_ref * wind_ratio
-
 
     # --- Terrain slope lookup ---
     slope_x = 0.0
@@ -151,20 +165,18 @@ def update_particles_3d_kernel(
         slope_mag = math.sqrt(slope_x * slope_x + slope_y * slope_y)
         if slope_mag > 1.0e-6:
             height_weight = 1.0 - particle_height_agl / chan_z_top
-            if height_weight < 0.0:
-                height_weight = 0.0
+            height_weight = max(height_weight, 0.0)
             slope_weight = slope_mag / (slope_mag + chan_slope_ref)
             alpha_eff = chan_alpha * height_weight * slope_weight
             # Contour-tangent unit vector (perpendicular to gradient)
             tx = -slope_y / slope_mag
-            ty =  slope_x / slope_mag
+            ty = slope_x / slope_mag
             nx_slope = slope_x / slope_mag
             ny_slope = slope_y / slope_mag
             wind_dot_tangent = u_z * tx + v_z * ty
             wind_dot_normal = u_z * nx_slope + v_z * ny_slope
             normal_scale = 1.0 - alpha_eff
-            if normal_scale < CHANNELING_CROSS_SLOPE_MIN:
-                normal_scale = CHANNELING_CROSS_SLOPE_MIN
+            normal_scale = max(normal_scale, CHANNELING_CROSS_SLOPE_MIN)
             u_z = wind_dot_tangent * tx + wind_dot_normal * normal_scale * nx_slope
             v_z = wind_dot_tangent * ty + wind_dot_normal * normal_scale * ny_slope
 
@@ -172,8 +184,7 @@ def update_particles_3d_kernel(
     # Mountain waves theory solution for boundary layer, derived from Smith, Ronald B. ‘The Influence of Mountains on the Atmosphere’..
     if oro_alpha > 0.0 and particle_height_agl < oro_z_top:
         height_weight_oro = 1.0 - particle_height_agl / oro_z_top
-        if height_weight_oro < 0.0:
-            height_weight_oro = 0.0
+        height_weight_oro = max(height_weight_oro, 0.0)
         if OROGRAPHIC_USE_PRECHANNEL_WIND:
             w_oro = oro_alpha * height_weight_oro * (u_z * slope_x + v_z * slope_y)
         else:
@@ -182,7 +193,7 @@ def update_particles_3d_kernel(
     x[idx, k] += u_z * dt
     y[idx, k] += v_z * dt
     if j == 0:
-        z[idx, k] += release_vz[k]/2
+        z[idx, k] += release_vz[k] / 2
     z[idx, k] += (w_mean - w_settle + w_oro) * dt
 
     if Kxy > 0.0:
@@ -199,8 +210,8 @@ def update_particles_3d_kernel(
     particle_height_agl = z[idx, k] - z_dem
     # Smooth Kz profile (tanh transitions) + Thomson drift correction
     # Transition heights and smoothing half-width
-    z1 = 0.1 * blh # low ↔ mid transition (AGL)
-    z2 = 0.5 * blh   # mid ↔ high transition (AGL)
+    z1 = 0.1 * blh  # low ↔ mid transition (AGL)
+    z2 = 0.5 * blh  # mid ↔ high transition (AGL)
     # delta = 20.0  # smoothing half-width (m)
     # h = max(particle_height_agl, 0.1)
     # t1 = math.tanh((h - z1) / delta)
@@ -219,38 +230,43 @@ def update_particles_3d_kernel(
     elif particle_height_agl >= z2:
         current_kz = Kz_high
 
-
     if current_kz > 0.0:
         std_z = math.sqrt(2.0 * current_kz * dt)
-        z[idx, k] +=  xoroshiro128p_normal_float32(rng_states, k) * std_z #+ dKz_DZ * dt
+        z[idx, k] += (
+            xoroshiro128p_normal_float32(rng_states, k) * std_z
+        )  # + dKz_DZ * dt
 
     # # Chemical conversion: NH3 (type=0) → NH4+ (type=1)
     if SPECIES == "NH3" and particle_type[idx, k] == 0 and P_conversion > 0.0:
         if xoroshiro128p_uniform_float32(rng_states, k) <= P_conversion:
             particle_type[idx, k] = 1  # Convert to NH4+ particle
-            
+
     ix_dem = int((x[idx, k] - dem_minx) / dem_dx)
     iy_dem = int((y[idx, k] - dem_miny) / dem_dy)
-    
+
     if DEPOSITION_ENABLED == 1:
         if 0 <= ix_dem < dem_nx and 0 <= iy_dem < dem_ny:
             v_d = float(v_d_map[ix_dem, iy_dem])
-            v_d = v_d/100.0
-            #v_d_temp = float(v_d * (1.0 + 0.04 * (temp_particle_height_agl - 15.0)))
-            #v_d_temp = max(0.002, min(0.05, v_d_temp))
-            H_raw = float(math.sqrt(2* Kz_low * dt))  # rough estimate of surface mixing layer height
-            H = float(H_raw*H_FACTOR)
-            P_dep_surf = np.float32(
-                1.0 - math.exp(-v_d * dt / H)
-            )
+            v_d = v_d / 100.0
+            # v_d_temp = float(v_d * (1.0 + 0.04 * (temp_particle_height_agl - 15.0)))
+            # v_d_temp = max(0.002, min(0.05, v_d_temp))
+            H_raw = float(
+                math.sqrt(2 * Kz_low * dt)
+            )  # rough estimate of surface mixing layer height
+            H = float(H_raw * H_FACTOR)
+            P_dep_surf = np.float32(1.0 - math.exp(-v_d * dt / H))
             z_dem = dem[ix_dem, iy_dem]
-            
-            if z[idx, k] < (z_dem+H): 
+
+            if z[idx, k] < (z_dem + H):
                 P_dep = P_dep_surf if particle_type[idx, k] == 0 else P_dep_nh4
                 if xoroshiro128p_uniform_float32(rng_states, k) <= P_dep:
-                    ix = int(math.floor(x[idx, k] / GRID_RES) - math.floor(minx / GRID_RES))
-                    iy = int(math.floor(y[idx, k] / GRID_RES) - math.floor(miny / GRID_RES))
-                    add_mass = particle_mass_g[idx]*seasonal_factor_step[k]
+                    ix = int(
+                        math.floor(x[idx, k] / GRID_RES) - math.floor(minx / GRID_RES)
+                    )
+                    iy = int(
+                        math.floor(y[idx, k] / GRID_RES) - math.floor(miny / GRID_RES)
+                    )
+                    add_mass = particle_mass_g[idx] * seasonal_factor_step[k]
                     if 0 <= ix < nx and 0 <= iy < ny:
                         cuda.atomic.add(depo_grid, (ix, iy), add_mass)
                     cuda.atomic.add(mass_budget, MASS_BUDGET_DRY_DEP, add_mass)
@@ -261,9 +277,13 @@ def update_particles_3d_kernel(
 
             if P_wet_dep > 0.0:
                 if xoroshiro128p_uniform_float32(rng_states, k) <= P_wet_dep:
-                    ix = int(math.floor(x[idx, k] / GRID_RES) - math.floor(minx / GRID_RES))
-                    iy = int(math.floor(y[idx, k] / GRID_RES) - math.floor(miny / GRID_RES))
-                    add_mass = particle_mass_g[idx]*seasonal_factor_step[k]
+                    ix = int(
+                        math.floor(x[idx, k] / GRID_RES) - math.floor(minx / GRID_RES)
+                    )
+                    iy = int(
+                        math.floor(y[idx, k] / GRID_RES) - math.floor(miny / GRID_RES)
+                    )
+                    add_mass = particle_mass_g[idx] * seasonal_factor_step[k]
                     if 0 <= ix < nx and 0 <= iy < ny:
                         cuda.atomic.add(depo_grid, (ix, iy), add_mass)
                     cuda.atomic.add(mass_budget, MASS_BUDGET_WET_DEP, add_mass)
@@ -271,34 +291,29 @@ def update_particles_3d_kernel(
                     y[idx, k] = SENTINEL
                     z[idx, k] = SENTINEL
                     return
-                    
+
             if z[idx, k] < z_dem:
                 # Inelastic rebound from penetration depth (momentum proxy from this step)
                 penetration = z_dem - z[idx, k]
-                if penetration < 0.0:
-                    penetration = 0.0
+                penetration = max(penetration, 0.0)
 
                 # e=1 mirrors depth exactly; e<1 damps rebound near the surface.
                 restitution = 0.35
                 z_new = z_dem + restitution * penetration
                 z_floor = z_dem + z0
-                if z_new < z_floor:
-                    z_new = z_floor
+                z_new = max(z_new, z_floor)
                 z[idx, k] = z_new
-
 
     else:
         z_dem = dem[ix_dem, iy_dem]
         if z[idx, k] < z_dem:
             # If deposition is not enabled, jusut check for rebound
             penetration = z_dem - z[idx, k]
-            if penetration < 0.0:
-                penetration = 0.0
+            penetration = max(penetration, 0.0)
 
             # e=1 mirrors depth exactly; e<1 damps rebound near the surface.
             restitution = 0.35
             z_new = z_dem + restitution * penetration
             z_floor = z_dem + z0
-            if z_new < z_floor:
-                z_new = z_floor
+            z_new = max(z_new, z_floor)
             z[idx, k] = z_new

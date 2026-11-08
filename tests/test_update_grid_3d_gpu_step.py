@@ -1,6 +1,9 @@
-from gpu_model.update_grid_3d_gpu_step import update_grid_3d_gpu_step
 import numpy as np
 from numba import cuda
+
+from gpu_model.update_grid_3d_gpu_step import update_grid_3d_gpu_step
+
+
 def test_update_grid_3d_gpu_step():
     # Test case 1:
     # Particle has 4 coordinates for each step. On step 4, the particle is out of bounds in x (50.5 > nx*grid_res = 10*1.0 = 10.0) and should be removed (set to SENTINEL).
@@ -47,8 +50,10 @@ def test_update_grid_3d_gpu_step():
         include_nh4,
         d_dem,
         threads=threads,
-        seasonal_factor_step=seasonal_factor_step
+        seasonal_factor_step=seasonal_factor_step,
     )
 
     c_conc3d = d_conc3d.copy_to_host()
-    assert c_conc3d[0,0,0] == d_particle_mass_g.copy_to_host()[0], "Element 3 should remain unchanged"
+    assert c_conc3d[0, 0, 0] == d_particle_mass_g.copy_to_host()[0], (
+        "Element 3 should remain unchanged"
+    )

@@ -1,6 +1,8 @@
-from gpu_model.zero_3d_kernel import zero_3d_kernel
-from numba import cuda
 import numpy as np
+from numba import cuda
+
+from gpu_model.zero_3d_kernel import zero_3d_kernel
+
 
 def test_zero_3d_kernel():
     # Test case 1:
@@ -14,4 +16,6 @@ def test_zero_3d_kernel():
     zero_3d_kernel[1, threads](d_array)
 
     c_array = d_array.copy_to_host()
-    assert np.all(c_array == 0.0), "All elements should be zero after applying the kernel"
+    assert np.all(c_array == 0.0), (
+        "All elements should be zero after applying the kernel"
+    )

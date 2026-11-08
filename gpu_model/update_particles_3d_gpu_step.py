@@ -1,6 +1,9 @@
 import numpy as np
-from gpu_model.update_particles_3d_kernel import update_particles_3d_kernel
+
 from config.params import *
+from gpu_model.update_particles_3d_kernel import update_particles_3d_kernel
+
+
 def update_particles_3d_gpu_step(
     step_in_window,
     head,
@@ -52,9 +55,9 @@ def update_particles_3d_gpu_step(
     d_initial_release_vz,
     d_seasonal_factor_step,
     d_temperature_celsius,
-    #d_bool_day,
-    #d_slope_5,
-    ):
+    # d_bool_day,
+    # d_slope_5,
+):
     n_part = d_x.shape[1]
     # 2D grid: blockIdx.x = time-slice j (0..step_in_window),
     #          blockIdx.y * blockDim.x + threadIdx.x = particle k
@@ -114,7 +117,6 @@ def update_particles_3d_gpu_step(
         d_initial_release_vz,
         d_seasonal_factor_step,
         np.float32(d_temperature_celsius),
-        #np.float32(d_bool_day),
-        #np.float32(d_slope_5),
-
+        # np.float32(d_bool_day),
+        # np.float32(d_slope_5),
     )

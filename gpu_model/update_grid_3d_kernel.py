@@ -1,4 +1,6 @@
 from numba import cuda
+
+
 @cuda.jit
 def update_grid_3d_kernel(
     step,
@@ -39,8 +41,8 @@ def update_grid_3d_kernel(
     ix = int((x[idx, k] // GRID_RES) - int(minx / GRID_RES))
     iy = int((y[idx, k] // GRID_RES) - int(miny / GRID_RES))
     iz = int(z[idx, k] / DZ)
-    
+
     if 0 <= ix < nx and 0 <= iy < ny and 0 <= iz < nz:
         voxel_vol = GRID_RES * GRID_RES * DZ
-        val = (particle_mass_g[idx]*seasonal_factor_step[k]) / voxel_vol
+        val = (particle_mass_g[idx] * seasonal_factor_step[k]) / voxel_vol
         cuda.atomic.add(conc3d, (ix, iy, iz), val)

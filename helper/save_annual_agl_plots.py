@@ -1,8 +1,9 @@
-
 import os
-import numpy as np
+
 import matplotlib.pyplot as plt
+import numpy as np
 import rasterio
+
 
 def save_annual_agl_plots(
     annual_surface_mean,
@@ -13,7 +14,7 @@ def save_annual_agl_plots(
     maxy_3857,
     monthly_agl_top_m,
     species_label,
-    species_unit
+    species_unit,
 ):
     """Save annual mean concentration plots and GeoTIFFs for the near-surface AGL layer."""
     annual_dir = os.path.join(output_dir, "annual_agl_plots")
@@ -23,7 +24,7 @@ def save_annual_agl_plots(
     vmax = float(np.nanpercentile(conc_plot, 99.0))
     if not np.isfinite(vmax) or vmax <= 0.0:
         vmax = 10.0
-    plt.style.use('dark_background')
+    plt.style.use("dark_background")
     fig, ax = plt.subplots(figsize=(8, 6))
     masked_grid = np.ma.masked_where(conc_plot.T <= 1e-6, conc_plot.T)
     im = ax.imshow(
@@ -36,8 +37,12 @@ def save_annual_agl_plots(
         vmin=0.0,
         vmax=vmax,
     )
-    ax.set_title(f"Annual Avg Concentration (0-{monthly_agl_top_m} m AGL) ({species_label})")
-    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label=f"Concentration ({species_unit})")
+    ax.set_title(
+        f"Annual Avg Concentration (0-{monthly_agl_top_m} m AGL) ({species_label})"
+    )
+    fig.colorbar(
+        im, ax=ax, fraction=0.046, pad=0.04, label=f"Concentration ({species_unit})"
+    )
 
     out_png = os.path.join(annual_dir, f"annual_agl_0_{monthly_agl_top_m}m.png")
     fig.savefig(out_png, dpi=150)
@@ -49,19 +54,21 @@ def save_annual_agl_plots(
     pixel_width = (maxx_3857 - minx_3857) / nx
     pixel_height = (maxy_3857 - miny_3857) / ny
     from rasterio.transform import Affine
-    transform = Affine.translation(minx_3857, maxy_3857) * Affine.scale(pixel_width, -pixel_height)
+
+    transform = Affine.translation(minx_3857, maxy_3857) * Affine.scale(
+        pixel_width, -pixel_height
+    )
     with rasterio.open(
         out_tif,
-        'w',
-        driver='GTiff',
+        "w",
+        driver="GTiff",
         height=ny,
         width=nx,
         count=1,
         dtype=conc_plot.dtype,
-        crs='EPSG:3857',
+        crs="EPSG:3857",
         transform=transform,
         nodata=np.nan,
     ) as dst:
         dst.write(conc_plot.T[::-1, :], 1)
     print(f"✓ Saved annual 0-{monthly_agl_top_m} m AGL GeoTIFF: {out_tif}")
-

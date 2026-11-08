@@ -1,8 +1,12 @@
 from numba import cuda
+
 from config.params import *
 
+
 @cuda.jit
-def fill_rows_and_reset_type_kernel(x, y, z, particle_type, particle_mass_g, mass_budget, row, xval, yval, zval):
+def fill_rows_and_reset_type_kernel(
+    x, y, z, particle_type, particle_mass_g, mass_budget, row, xval, yval, zval
+):
     k = cuda.grid(1)
     n = x.shape[1]
     if k < n:

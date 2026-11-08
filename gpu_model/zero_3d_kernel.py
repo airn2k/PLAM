@@ -1,4 +1,6 @@
 from numba import cuda
+
+
 @cuda.jit
 def zero_3d_kernel(arr):
     """Zero a 3-D device array using a flat 1-D grid."""
@@ -13,5 +15,3 @@ def zero_3d_kernel(arr):
         iy = rem % ny_l
         ix = rem // ny_l
         arr[ix, iy, iz] = 0.0
-
-

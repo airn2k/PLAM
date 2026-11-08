@@ -1,8 +1,9 @@
-
 import os
-import rasterio
-import numpy as np
+
 import matplotlib.pyplot as plt
+import numpy as np
+import rasterio
+
 
 def save_annual_depo_plots(
     annual_depo,
@@ -14,7 +15,7 @@ def save_annual_depo_plots(
     species_label,
     species_unit_depo,
     grid_res,
-    total_hours
+    total_hours,
 ):
     """Save annual deposition plots and GeoTIFFs."""
     annual_dir = os.path.join(output_dir, "annual_depo_plots")
@@ -22,18 +23,19 @@ def save_annual_depo_plots(
 
     depo = np.asarray(annual_depo, dtype=np.float64)
     nh3_to_n = 14.007 / 17.031
-    cell_area_m2 = grid_res*grid_res
-    depo = (depo
-                 * nh3_to_n            # microg NH3 → microg N
-                 / 1000000000.0              # microg → kg
-                 * (10000.0 / cell_area_m2)  # per cell → per ha
-                 * (365.25*24/total_hours))  # sim period → year
-
+    cell_area_m2 = grid_res * grid_res
+    depo = (
+        depo
+        * nh3_to_n  # microg NH3 → microg N
+        / 1000000000.0  # microg → kg
+        * (10000.0 / cell_area_m2)  # per cell → per ha
+        * (365.25 * 24 / total_hours)
+    )  # sim period → year
 
     vmax = float(np.nanpercentile(depo, 99.0))
     if not np.isfinite(vmax) or vmax <= 0.0:
         vmax = 1.0
-    plt.style.use('dark_background')
+    plt.style.use("dark_background")
     fig, ax = plt.subplots(figsize=(8, 6))
     plt.style.use("dark_background")
     masked_grid = np.ma.masked_where(depo.T <= 1e-6, depo.T)
@@ -48,7 +50,13 @@ def save_annual_depo_plots(
         vmax=vmax,
     )
     ax.set_title(f"Annual Deposition Rate ({species_label})")
-    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label=f"Deposition Rate ({species_unit_depo})")
+    fig.colorbar(
+        im,
+        ax=ax,
+        fraction=0.046,
+        pad=0.04,
+        label=f"Deposition Rate ({species_unit_depo})",
+    )
 
     out_png = os.path.join(annual_dir, f"annual_depo_{species_label}.png")
     fig.savefig(out_png, dpi=150)
@@ -60,16 +68,19 @@ def save_annual_depo_plots(
     pixel_width = (maxx_3857 - minx_3857) / nx
     pixel_height = (maxy_3857 - miny_3857) / ny
     from rasterio.transform import Affine
-    transform = Affine.translation(minx_3857, maxy_3857) * Affine.scale(pixel_width, -pixel_height)
+
+    transform = Affine.translation(minx_3857, maxy_3857) * Affine.scale(
+        pixel_width, -pixel_height
+    )
     with rasterio.open(
         out_tif,
-        'w',
-        driver='GTiff',
+        "w",
+        driver="GTiff",
         height=ny,
         width=nx,
         count=1,
         dtype=depo.dtype,
-        crs='EPSG:3857',
+        crs="EPSG:3857",
         transform=transform,
         nodata=np.nan,
     ) as dst:

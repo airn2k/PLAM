@@ -1,29 +1,31 @@
-import numpy as np
 import geopandas as gpd
+import numpy as np
+
+
 def sample_points_in_polygon(polygon, num_points):
     """Regular grid sampling for fast, systematic point generation."""
     minx, miny, maxx, maxy = polygon.bounds
-    
+
     # Calculate grid spacing for systematic sampling
     area = (maxx - minx) * (maxy - miny)
     grid_spacing = np.sqrt(area / (num_points * 1.5))  # 1.5x oversample for filtering
-    
+
     # Generate regular grid
-    x_coords = np.arange(minx + grid_spacing/2, maxx, grid_spacing)
-    y_coords = np.arange(miny + grid_spacing/2, maxy, grid_spacing)
-    
+    x_coords = np.arange(minx + grid_spacing / 2, maxx, grid_spacing)
+    y_coords = np.arange(miny + grid_spacing / 2, maxy, grid_spacing)
+
     # Create meshgrid and flatten
     X, Y = np.meshgrid(x_coords, y_coords)
     x_flat = X.flatten()
     y_flat = Y.flatten()
-    
+
     # Filter points inside polygon (vectorized)
     points_gdf = gpd.GeoDataFrame(geometry=gpd.points_from_xy(x_flat, y_flat))
     inside_mask = points_gdf.within(polygon)
-    
+
     valid_x = x_flat[inside_mask]
     valid_y = y_flat[inside_mask]
-    
+
     # Take exactly num_points (repeat if needed, truncate if too many)
     if len(valid_x) == 0:
         # Fallback to centroid if no points found
@@ -42,5 +44,5 @@ def sample_points_in_polygon(polygon, num_points):
             centroid = polygon.centroid
             while len(points) < num_points:
                 points.append([centroid.x, centroid.y])
-        
+
         return np.array(points)

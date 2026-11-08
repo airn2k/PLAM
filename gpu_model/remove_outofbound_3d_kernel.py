@@ -1,8 +1,26 @@
 from numba import cuda
+
 from config.params import *
+
+
 @cuda.jit
 def remove_outofbound_3d_kernel(
-    step, head, f_step, GRID_RES, DZ, minx, miny, x, y, z, particle_mass_g, nx, ny, nz, dem, mass_budget
+    step,
+    head,
+    f_step,
+    GRID_RES,
+    DZ,
+    minx,
+    miny,
+    x,
+    y,
+    z,
+    particle_mass_g,
+    nx,
+    ny,
+    nz,
+    dem,
+    mass_budget,
 ):
     j = cuda.blockIdx.x
     k = cuda.threadIdx.x + cuda.blockDim.x * cuda.blockIdx.y
@@ -28,7 +46,9 @@ def remove_outofbound_3d_kernel(
     vertical_oob = not (0 <= iz < nz)
     if horizontal_oob or vertical_oob:
         if horizontal_oob:
-            cuda.atomic.add(mass_budget, MASS_BUDGET_OOB_HORIZONTAL, particle_mass_g[idx])
+            cuda.atomic.add(
+                mass_budget, MASS_BUDGET_OOB_HORIZONTAL, particle_mass_g[idx]
+            )
         if vertical_oob:
             cuda.atomic.add(mass_budget, MASS_BUDGET_OOB_VERTICAL, particle_mass_g[idx])
         x[idx, k] = SENTINEL

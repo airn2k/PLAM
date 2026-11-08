@@ -1,10 +1,12 @@
-from gpu_model.fill_rows_kernel import fill_rows_kernel
 import numpy as np
+
+from gpu_model.fill_rows_kernel import fill_rows_kernel
 
 
 def test_fill_rows_kernel():
     # Define the input arrays
     from numba import cuda
+
     x = cuda.to_device(np.zeros((3, 4), dtype=np.float32))
     y = cuda.to_device(np.zeros((3, 4), dtype=np.float32))
     z = cuda.to_device(np.zeros((3, 4), dtype=np.float32))
