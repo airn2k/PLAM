@@ -142,226 +142,6 @@ def combine_results(chunks, timestamp, output_dir, site_dir):
         print(f"⚠️  Error combining results: {e}")
 
 
-def combine_maps(output_dir, timestamp):
-    """Combine deposition and concentration arrays from all chunks into weighted-average maps."""
-    import json
-
-    import numpy as np
-
-    try:
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import contextily as ctx
-        import matplotlib.pyplot as plt
-        import rasterio
-        from mpl_toolkits.axes_grid1.inset_locator import inset_axes
-        from rasterio.transform import Affine
-    except ImportError as e:
-        print(f"⚠️  Cannot create combined plots (missing library): {e}")
-        return
-
-    def save_combined_annual_agl_plots(conc_array, out_dir, minx, maxx, miny, maxy):
-        annual_dir = os.path.join(out_dir, "annual_agl_plots")
-        os.makedirs(annual_dir, exist_ok=True)
-
-        conc_plot = np.asarray(conc_array, dtype=np.float64)
-        vmax = float(np.nanpercentile(conc_plot, 99.0))
-        if not np.isfinite(vmax) or vmax <= 0.0:
-            vmax = 1.0
-
-        fig, ax = plt.subplots(figsize=(8, 6))
-        plt.style.use("dark_background")
-        masked = np.ma.masked_where(conc_plot.T < 1e-9, conc_plot.T)
-        im = ax.imshow(
-            masked,
-            origin="lower",
-            cmap="hot",
-            extent=[minx, maxx, miny, maxy],
-            zorder=1,
-            alpha=0.8,
-            vmin=0.0,
-            vmax=vmax,
-        )
-
-        cax = inset_axes(ax, width="5%", height="50%", loc="lower right", borderpad=1.0)
-        cbar = fig.colorbar(im, cax=cax, orientation="vertical")
-        cbar.set_label(
-            "Avg ambient odour (OU/m³)\n(0-100 m AGL mean)", fontsize=9, color="white"
-        )
-        cbar.ax.tick_params(labelsize=9, colors="white")
-        cbar.ax.yaxis.set_ticks_position("left")
-        cbar.ax.yaxis.set_label_position("left")
-        ax.axis("off")
-        fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
-
-        png_path = os.path.join(annual_dir, "annual_agl_0_100m.png")
-        fig.savefig(png_path, dpi=150)
-        plt.close(fig)
-        print(f"✓ Saved combined annual AGL plot: {png_path}")
-
-        tif_path = os.path.join(annual_dir, "annual_agl_0_100m.tif")
-        nx, ny = conc_plot.shape
-        pixel_width = (maxx - minx) / nx
-        pixel_height = (maxy - miny) / ny
-        transform = Affine.translation(minx, maxy) * Affine.scale(
-            pixel_width, -pixel_height
-        )
-        with rasterio.open(
-            tif_path,
-            "w",
-            driver="GTiff",
-            height=ny,
-            width=nx,
-            count=1,
-            dtype=conc_plot.dtype,
-            crs="EPSG:3857",
-            transform=transform,
-            nodata=np.nan,
-        ) as dst:
-            dst.write(conc_plot.T[::-1, :], 1)
-        print(f"✓ Saved combined annual AGL GeoTIFF: {tif_path}")
-
-    # Discover all chunk metadata + arrays
-    meta_files = sorted(
-        glob.glob(
-            os.path.join(output_dir, "**", "grid_metadata_*.json"), recursive=True
-        )
-    )
-    if not meta_files:
-        print("⚠️  No grid_metadata JSON files found — cannot create combined maps")
-        return
-
-    # Load extent from first metadata (all chunks share the same grid)
-    with open(meta_files[0]) as f:
-        meta = json.load(f)
-    minx_3857 = meta["minx_3857"]
-    maxx_3857 = meta["maxx_3857"]
-    miny_3857 = meta["miny_3857"]
-    maxy_3857 = meta["maxy_3857"]
-    nx, ny = meta["nx"], meta["ny"]
-
-    # --- Deposition: time-weighted average of kg N/yr/ha ---
-    depo_files = sorted(
-        glob.glob(
-            os.path.join(output_dir, "**", "deposition_array_*.npy"), recursive=True
-        )
-    )
-    if depo_files:
-        total_hours = 0
-        depo_accum = np.zeros((nx, ny), dtype=np.float64)
-        for df in depo_files:
-            # Find matching metadata in the same directory
-            d = os.path.dirname(df)
-            mf = glob.glob(os.path.join(d, "grid_metadata_*.json"))
-            hours = 1
-            if mf:
-                with open(mf[0]) as f:
-                    hours = json.load(f).get("total_hours", 1)
-            arr = np.load(df)
-            depo_accum += arr.astype(np.float64) * hours
-            total_hours += hours
-        depo_combined = (depo_accum / max(total_hours, 1)).astype(np.float32)
-
-        # Save combined array
-        np.save(
-            os.path.join(output_dir, f"deposition_combined_{timestamp}.npy"),
-            depo_combined,
-        )
-
-        # Plot
-        fig, ax = plt.subplots(figsize=(8, 6))
-        plt.style.use("dark_background")
-        masked = np.ma.masked_where(depo_combined.T < 1e-3, depo_combined.T)
-        im = ax.imshow(
-            masked,
-            origin="lower",
-            cmap="hot",
-            extent=[minx_3857, maxx_3857, miny_3857, maxy_3857],
-            zorder=1,
-            alpha=0.8,
-        )
-
-        cax = inset_axes(ax, width="5%", height="50%", loc="lower right", borderpad=1.0)
-        cbar = fig.colorbar(im, cax=cax, orientation="vertical")
-        cbar.set_label("N deposition (kg N/yr/ha)", fontsize=9, color="white")
-        cbar.ax.tick_params(labelsize=9, colors="white")
-        cbar.ax.yaxis.set_ticks_position("left")
-        cbar.ax.yaxis.set_label_position("left")
-        ax.axis("off")
-        fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
-        depo_png = os.path.join(output_dir, f"deposition_combined_{timestamp}.png")
-        fig.savefig(depo_png, dpi=150)
-        plt.close(fig)
-        print(f"✓ Combined deposition map: {depo_png}")
-        print(
-            f"  Max: {depo_combined.max():.4f} kg N/yr/ha  Mean (nonzero): {depo_combined[depo_combined > 0].mean():.4f} kg N/yr/ha"
-        )
-    else:
-        print("⚠️  No deposition_array .npy files found")
-
-    # --- Concentration: time-weighted average of µg/m³ ---
-    conc_files = sorted(
-        glob.glob(
-            os.path.join(output_dir, "**", "concentration_array_*.npy"), recursive=True
-        )
-    )
-    if conc_files:
-        total_hours = 0
-        conc_accum = np.zeros((nx, ny), dtype=np.float64)
-        for cf in conc_files:
-            d = os.path.dirname(cf)
-            mf = glob.glob(os.path.join(d, "grid_metadata_*.json"))
-            hours = 1
-            if mf:
-                with open(mf[0]) as f:
-                    hours = json.load(f).get("total_hours", 1)
-            arr = np.load(cf)
-            conc_accum += arr.astype(np.float64) * hours
-            total_hours += hours
-        conc_combined = (conc_accum / max(total_hours, 1)).astype(np.float32)
-
-        np.save(
-            os.path.join(output_dir, f"concentration_combined_{timestamp}.npy"),
-            conc_combined,
-        )
-        save_combined_annual_agl_plots(
-            conc_combined, output_dir, minx_3857, maxx_3857, miny_3857, maxy_3857
-        )
-
-        fig, ax = plt.subplots(figsize=(8, 6))
-        plt.style.use("dark_background")
-        masked = np.ma.masked_where(conc_combined.T < 1e-9, conc_combined.T)
-        im = ax.imshow(
-            masked,
-            origin="lower",
-            cmap="hot",
-            extent=[minx_3857, maxx_3857, miny_3857, maxy_3857],
-            zorder=1,
-            alpha=0.8,
-        )
-
-        cax = inset_axes(ax, width="5%", height="50%", loc="lower right", borderpad=1.0)
-        cbar = fig.colorbar(im, cax=cax, orientation="vertical")
-        cbar.set_label(
-            "Avg ambient odour (OU/m³)\n(0-100 m mean)", fontsize=9, color="white"
-        )
-        cbar.ax.tick_params(labelsize=9, colors="white")
-        cbar.ax.yaxis.set_ticks_position("left")
-        cbar.ax.yaxis.set_label_position("left")
-        ax.axis("off")
-        fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
-        conc_png = os.path.join(output_dir, f"concentration_combined_{timestamp}.png")
-        fig.savefig(conc_png, dpi=150)
-        plt.close(fig)
-        print(f"✓ Combined concentration map: {conc_png}")
-        print(
-            f"  Max: {conc_combined.max():.4f} OU/m³  Mean (nonzero): {conc_combined[conc_combined > 0].mean():.4f} OU/m³"
-        )
-    else:
-        print("⚠️  No concentration_array .npy files found")
-
-
 def calculate_optimal_chunks(start_date, end_date):
     """Calculate optimal chunking based on the number of days in the period."""
     total_days = (end_date - start_date).days
@@ -629,7 +409,7 @@ Examples:
                 completed = len(processes) - running
                 elapsed = current_time - start_time
                 print(
-                    f"[{elapsed / 60:.1f}m] Progress: {completed}/{len(chunks)} complete, {running} running, {len(pending)} queued..."
+                    f"[{elapsed / 60:.1f}m] Progress: {completed}/{len(chunks)} complete, {running} running, {len(pending)} queued...)"
                 )
                 last_update = current_time
 
@@ -647,22 +427,13 @@ Examples:
                             if chunk_name not in running_names:
                                 continue
                             chunk_output_dir = os.path.join(output_dir, chunk_name)
-                            start_clean = chunk_start.strftime("%Y-%m-%d_%H-%M-%S")
-                            end_clean = chunk_end.strftime("%Y-%m-%d_%H-%M-%S")
-                            csv_path = os.path.join(
-                                chunk_output_dir,
-                                f"sampler_timeseries_{start_clean}_{end_clean}.csv",
-                            )
-                            if os.path.exists(csv_path):
-                                latest_sample_date = pd.read_csv(
-                                    csv_path, parse_dates=["date_time"]
-                                ).date_time.max()
-                                progress = (
-                                    (latest_sample_date - chunk_start).total_seconds()
-                                    / (chunk_end - chunk_start).total_seconds()
-                                    * 100
-                                )
-                                print(f"  {chunk_name}: {progress:.1f}% complete")
+                            # Read the progress from the progress.txt file if it exists
+                            progress_file = os.path.join(chunk_output_dir, "progress.txt")
+                            if os.path.exists(progress_file):
+                                with open(progress_file, "r") as f:
+                                    progress = f.read().strip()
+                                print(f"  {chunk_name}: {progress}% complete")
+
 
                         nvidia_output = subprocess.run(
                             [
@@ -736,7 +507,6 @@ Examples:
             print("COMBINING RESULTS")
             print("=" * 70)
             combine_results(chunks, timestamp, output_dir, site_dir)
-            combine_maps(output_dir, timestamp)
 
     except KeyboardInterrupt:
         print("\n\n⚠️  Interrupted by user. Terminating all processes...")

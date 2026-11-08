@@ -58,9 +58,9 @@ from helper.hillshade import hillshade
 # Import helper functions
 from helper.sample_dem_at_points import sample_dem_at_points
 from helper.sample_points_in_polygon import sample_points_in_polygon
-from helper.save_monthly_agl_plots import save_monthly_agl_plots
-from helper.save_monthly_depo_plots import save_monthly_depo_plots
-from helper.save_monthly_vertical_plots import save_monthly_vertical_plots
+from helper.save_agl_plots import save_agl_plots
+from helper.save_depo_plots import save_depo_plots
+from helper.save_vertical_plots import save_vertical_plots
 from helper.vertical_profile_mean import vertical_profile_mean
 from plam_sites.fetch_dem import fetch_and_load_dem
 from plam_sites.fetch_era5_weather_chunked import fetch_era5_chunked
@@ -948,25 +948,6 @@ if 0 <= sampler_idx[0] < nx and 0 <= sampler_idx[1] < ny:
 else:
     print(f"WARNING: Sampler index out of bounds: {sampler_idx}")
 
-peak_flat_idx = int(np.argmax(ground_height_grid))
-peak_ix, peak_iy = np.unravel_index(peak_flat_idx, ground_height_grid.shape)
-peak_sampler_loc_itm = (
-    minx + (peak_ix + 0.5) * GRID_RES,
-    miny + (peak_iy + 0.5) * GRID_RES,
-)
-peak_sampler_ground_asl = float(ground_height_grid[peak_ix, peak_iy])
-print(
-    f"Peak-terrain diagnostic cell: idx=({peak_ix}, {peak_iy}), "
-    f"ITM=({peak_sampler_loc_itm[0]:.1f}, {peak_sampler_loc_itm[1]:.1f}), "
-    f"ground={peak_sampler_ground_asl:.1f} m ASL"
-)
-print(
-    f"Monthly concentration plots use DEM-aware weighted 0-{monthly_agl_top_m:.0f} m AGL mean."
-)
-print(
-    f"Concentration species mode: {'NH3+NH4 (total)' if CONC_INCLUDE_NH4 else 'NH3 only'} "
-    f"CONC_SPECIES_MODE={CONC_SPECIES_MODE})"
-)
 sampler_conc = []
 peak_terrain_conc = []
 domain_max_conc = []
@@ -1045,6 +1026,14 @@ print("=" * 70)
 t0_precomp = time.time()
 
 # Preallocate arrays for all timesteps
+receptor_conc_array = np.zeros((total_steps, len(receptors)), dtype=np.float32)
+receptor_locations = np.array([((receptor["x"]-minx)/GRID_RES, (receptor["y"]-miny)/GRID_RES, 
+                                (receptor["height_m_agl"]+ground_height_grid[int((receptor["x"] - minx) // GRID_RES), int((receptor["y"] - miny) // GRID_RES)])/DZ) for receptor in receptors], dtype=np.int32)
+
+# Print receptor locations for sanity check
+for r_idx, (rx, ry, rz) in enumerate(receptor_locations):
+    print(f"Receptor {r_idx}: x={rx}, y={ry}, z={rz}")  
+
 u_array = np.zeros(total_steps, dtype=np.float32)
 v_array = np.zeros(total_steps, dtype=np.float32)
 Kxy_array = np.zeros(total_steps, dtype=np.float32)
@@ -1293,6 +1282,8 @@ monthly_surface_sum_depo = {} if DEPOSITION_ENABLED else None
 hourly_agl_collection = [] if HOURLY_MAPS == 1 else None
 d_v_d_map = cuda.to_device(v_d_map.astype(np.float16))
 d_z0_map = cuda.to_device(z0_map.astype(np.float16))
+d_receptor_conc_array = cuda.to_device(receptor_conc_array)
+d_receptor_locations = cuda.to_device(np.array(receptor_locations, dtype=np.int32))
 # zero the concentration accumulator
 zero_3d_kernel[conc3d_blocks, threads](d_conc3d)
 
@@ -1452,29 +1443,38 @@ for global_step in range(total_steps):
         d_dem,
         threads=threads,
         seasonal_factor_step=d_seasonal_factor_step,
+        receptor_conc_array=d_receptor_conc_array,
+        receptor_locations=d_receptor_locations,
+    )
+
+    
+    remove_outofbound_3d_gpu_step(
+        step_in_window,
+        head,
+        f_step,
+        GRID_RES,
+        DZ,
+        minx,
+        miny,
+        d_x,
+        d_y,
+        d_z,
+        d_particle_mass_g,
+        nx,
+        ny,
+        nz,
+        d_dem,
+        d_mass_budget,
+        threads=threads,
     )
 
     if (global_step % sample_interval) == 0:
-        print("Step", global_step, "of", total_steps, "...")
+        progress = (global_step / total_steps) * 100
 
-        # Zero persistent device conc3d buffer in-place
+        # Write the progress to a text file "progress" in the output directory as a single number, without appending
+        with open(os.path.join(output_dir, "progress.txt"), "w") as f:
+            f.write(f"{progress:.2f}\n")
 
-        depo_grid = d_depo.copy_to_host()
-        if SPECIES == "NH3":
-            conc3d = d_conc3d.copy_to_host()
-        elif SPECIES == "ODOR":
-            conc3d = d_conc3d.copy_to_host() * 100
-
-        # zero the concentration accumulator
-        zero_3d_kernel[conc3d_blocks, threads](d_conc3d)
-
-        # Take average based on sampling interval
-        conc3d = conc3d / sample_interval
-        conc3d += base_conc
-        minutes_per_step = 60.0 / timesteps_per_hour
-        total_minutes = global_step * minutes_per_step
-        hours_i = int(total_minutes // 60)
-        minutes_i = int(total_minutes % 60)
         # Take minute for hourly average
         if HOURLY_MAPS == 1:
             # Get hourly average AGL concentration and save it to geotiff
@@ -1487,99 +1487,6 @@ for global_step in range(total_steps):
             hourly_average_agl = hourly_average_agl.astype(np.float32)
             hourly_agl_collection.append(hourly_average_agl)
 
-        scale_factors = (1, 1, 1)  # Downscale
-
-        sample_datetime = datetime.strptime(
-            start_date, "%Y-%m-%d %H:%M:%S"
-        ) + timedelta(minutes=global_step * (60.0 / timesteps_per_hour))
-        month_key = sample_datetime.strftime("%Y-%m")
-        previous_month_key = (sample_datetime - relativedelta(months=1)).strftime(
-            "%Y-%m"
-        )
-
-        col_avg_monthly = agl_band_mean_weighted(
-            conc3d, ground_height_grid, DZ, monthly_agl_top_m
-        )
-        vertical_avg_monthly = vertical_profile_mean(conc3d, 4, "x")
-        if month_key not in monthly_surface_sum:
-            monthly_surface_sum[month_key] = np.zeros((nx, ny), dtype=np.float64)
-           #monthly_vertical_sum[month_key] = np.zeros((nx, nz), dtype=np.float64)
-            if DEPOSITION_ENABLED:
-                monthly_surface_sum_depo[month_key] = depo_grid.astype(np.float64)
-            monthly_surface_counts[month_key] = 0
-        monthly_surface_sum[month_key] += col_avg_monthly.astype(np.float64)
-       #monthly_vertical_sum[month_key] += vertical_avg_monthly.astype(np.float64)
-        if DEPOSITION_ENABLED:
-            try:
-                monthly_surface_sum_depo[month_key] = monthly_surface_sum_depo[
-                    previous_month_key
-                ] - depo_grid.astype(np.float64)
-            except Exception:
-                monthly_surface_sum_depo[month_key] = depo_grid.astype(np.float64)
-
-        monthly_surface_counts[month_key] += 1
-
-        receptor_values = {}
-        for receptor in receptors:
-            receptor_value = _sample_concentration_for_receptor(
-                conc3d, receptor, nx, ny, nz, ground_height_grid, DZ
-            )
-            receptor_values[receptor["name"]] = receptor_value
-            receptor_conc_by_name[receptor["name"]].append(receptor_value)
-
-        primary_receptor_name = receptor_names[0]
-        sampler = receptor_values[primary_receptor_name]
-        sampler_avg += sampler
-        num_samples = (global_step // sample_interval) + 1
-        print(
-            f"Sampler concentration for '{primary_receptor_name}' '{species_unit}':",
-            sampler_avg / num_samples,
-        )
-        sampler_conc.append(sampler)  # store in {species_unit}
-        peak_terrain_value = float(col_avg_monthly[peak_ix, peak_iy])
-        domain_max_value = float(np.max(col_avg_monthly))
-        peak_terrain_conc.append(peak_terrain_value)
-        domain_max_conc.append(domain_max_value)
-        print(f"Peak-terrain concentration ({species_unit}):", peak_terrain_value)
-        print(f"Domain max concentration ({species_unit}):", domain_max_value)
-
-        # Calculate frame's date and time
-
-        start_datetime = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S")
-        frame_date = start_datetime + timedelta(hours=hours_i, minutes=minutes_i)
-
-        # Create DataFrame with matching timestamps for each concentration value
-        timestamps = []
-        for i, conc in enumerate(sampler_conc):
-            step_time = start_datetime + timedelta(
-                minutes=i * sample_interval * (60.0 / timesteps_per_hour)
-            )
-            timestamps.append(step_time.strftime("%Y-%m-%d %H:%M"))
-
-        # Clean filename (remove spaces and colons)
-        start_clean = start_date.replace(" ", "_").replace(":", "-")
-        end_clean = end_date.replace(" ", "_").replace(":", "-")
-
-        data = {
-            "date_time": timestamps,
-            f"peak_terrain_concentration_{species_unit}": peak_terrain_conc,
-            f"domain_max_concentration_{species_unit}": domain_max_conc,
-        }
-        for receptor_name in receptor_names:
-            data[receptor_output_columns[receptor_name]] = receptor_conc_by_name[
-                receptor_name
-            ]
-        if len(receptor_names) == 1:
-            data[f"concentration_{species_unit}"] = receptor_conc_by_name[
-                receptor_names[0]
-            ]
-        df = pd.DataFrame(data)
-        filename = os.path.join(
-            output_dir, f"sampler_timeseries_{start_clean}_{end_clean}.csv"
-        )
-
-        df.to_csv(filename, index_label="time_step_100s")
-        print(f"✓ Saved sampler timeseries: {filename}")
         if PRODUCE_MAPS == 1:
             conc_agl = agl_band_mean_weighted(
                 conc3d,
@@ -1676,42 +1583,26 @@ for global_step in range(total_steps):
             )
             plt.close(fig)
 
-    remove_outofbound_3d_gpu_step(
-        step_in_window,
-        head,
-        f_step,
-        GRID_RES,
-        DZ,
-        minx,
-        miny,
-        d_x,
-        d_y,
-        d_z,
-        d_particle_mass_g,
-        nx,
-        ny,
-        nz,
-        d_dem,
-        d_mass_budget,
-        threads=threads,
-    )
-
     end = time.time()
     # print(end - start, "seconds for step", global_step)
+
+# Copy final receptor concentrations from device
+if receptor_names:
+    receptor_conc_array = d_receptor_conc_array.copy_to_host()+base_conc
+    for r_idx, receptor_name in enumerate(receptor_names):
+        receptor_conc_by_name[receptor_name] = receptor_conc_array[:, r_idx].tolist()
 
 # Save final receptor timeseries if not already written
 if receptor_names and receptor_conc_by_name[receptor_names[0]]:
     timestamps = []
     for i, _ in enumerate(receptor_conc_by_name[receptor_names[0]]):
-        step_time = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S") + timedelta(
-            minutes=i * sample_interval * (60.0 / timesteps_per_hour)
-        )
+        step_time = datetime.strptime(start_date, "%Y-%m-%d %H:%M:%S") + timedelta(seconds=
+            (3600/timesteps_per_hour)*i)
+        
         timestamps.append(step_time.strftime("%Y-%m-%d %H:%M"))
 
     data = {
         "date_time": timestamps,
-        f"peak_terrain_concentration_{species_unit}": peak_terrain_conc,
-        f"domain_max_concentration_{species_unit}": domain_max_conc,
     }
     for receptor_name in receptor_names:
         data[receptor_output_columns[receptor_name]] = receptor_conc_by_name[
@@ -1720,10 +1611,12 @@ if receptor_names and receptor_conc_by_name[receptor_names[0]]:
     if len(receptor_names) == 1:
         data[f"concentration_{species_unit}"] = receptor_conc_by_name[receptor_names[0]]
     df = pd.DataFrame(data)
+    start_clean = start_date.replace(" ", "_").replace(":", "-")
+    end_clean = end_date.replace(" ", "_").replace(":", "-")
     filename = os.path.join(
         output_dir, f"sampler_timeseries_{start_clean}_{end_clean}.csv"
     )
-    df.to_csv(filename, index_label="time_step_100s")
+    df.to_csv(filename, index_label="time_step")
     print(f"✓ Saved final sampler timeseries: {filename}")
 
 # =========================
@@ -1731,6 +1624,7 @@ if receptor_names and receptor_conc_by_name[receptor_names[0]]:
 # =========================
 print("\nCopying final deposition grid from device...")
 depo_grid = d_depo.copy_to_host()
+conc3d = d_conc3d.copy_to_host()
 x = d_x.copy_to_host()
 particle_mass_g = d_particle_mass_g.copy_to_host()
 mass_budget = d_mass_budget.copy_to_host().astype(np.float64)
@@ -1799,8 +1693,8 @@ if DEPOSITION_ENABLED:
     nh3_to_n = 14.007 / 17.031
     depo_grid = (
         depo_grid
-        * nh3_to_n  # g NH3 → g N
-        / 1000.0  # g → kg
+        * nh3_to_n  # ug NH3 → ug N
+        / 1000000000.0  # ug → kg
         * (10000.0 / cell_area_m2)  # per cell → per ha
         * (hours_per_year / total_hours)
     )  # sim period → year
@@ -1843,62 +1737,68 @@ meta_file = os.path.join(output_dir, f"grid_metadata_{start_clean}_{end_clean}.j
 with open(meta_file, "w") as mf:
     json.dump(grid_meta, mf)
 
+conc= agl_band_mean_weighted(conc3d, ground_height_grid, DZ, monthly_agl_top_m)
 # =========================
 # Final outputs
 # =========================
+save_agl_plots(
+   (conc+base_conc*total_steps),
+    total_steps,
+    DZ,
+    output_dir,
+    minx_3857,
+    maxx_3857,
+    miny_3857,
+    maxy_3857,
+    monthly_agl_top_m,
+    species_label,
+    species_unit,
+    start_clean,
+    end_clean,
+)
 
-if monthly_surface_sum:
-    save_monthly_agl_plots(
-        monthly_surface_sum,
-        monthly_surface_counts,
+if DEPOSITION_ENABLED:
+    save_depo_plots(
+        depo_grid,
         output_dir,
         minx_3857,
         maxx_3857,
         miny_3857,
         maxy_3857,
-        monthly_agl_top_m,
         species_label,
-        species_unit,
+        species_unit_depo,
+        GRID_RES,
+        total_hours,
+        start_clean,
+        end_clean,
     )
-    if DEPOSITION_ENABLED:
-        save_monthly_depo_plots(
-            monthly_surface_sum_depo,
-            monthly_surface_counts,
-            output_dir,
-            minx_3857,
-            maxx_3857,
-            miny_3857,
-            maxy_3857,
-            species_label,
-            species_unit_depo,
-            GRID_RES,
-            total_hours,
-        )
 else:
     print(
         "No monthly concentration samples were collected; monthly AGL plots were not generated."
     )
 
-if monthly_vertical_sum:
-    save_monthly_vertical_plots(
-        monthly_vertical_sum,
-        monthly_surface_counts,
-        output_dir,
-        minx_3857,
-        maxx_3857,
-        DZ,
-        Z_MAX,
-        Z_OF_INTEREST,
-        RECEPTOR_VERTICAL_RAD,
-        species_label,
-        species_unit,
-        GRID_RES,
-        ground_height_grid,
-    )
+
+save_vertical_plots(
+    (conc3d+base_conc*total_steps),
+    total_steps,
+    output_dir,
+    minx_3857,
+    maxx_3857,
+    DZ,
+    Z_MAX,
+    Z_OF_INTEREST,
+    RECEPTOR_VERTICAL_RAD,
+    species_label,
+    species_unit,
+    GRID_RES,
+    ground_height_grid,
+    start_clean,
+    end_clean
+)
 
 if HOURLY_MAPS == 1:
     tif_path = os.path.join(
-        output_dir, f"hourly_98th_{sample_datetime.strftime('%Y-%m')}.tif"
+        output_dir, f"hourly_98th_{start_clean}_{end_clean}.tif"
     )
     # Take the 98 percentile of the hourly averge AGL concentration to avoid extreme outliers
     hourly_average_agl = np.percentile(np.array(hourly_agl_collection), 98, axis=0)
