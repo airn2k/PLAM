@@ -40,5 +40,8 @@ lpis/
 era5_dataset/
 .venv/
 Corine2024/
-*.xml
+*.tif.aux.xml
 complete_cycle
+maps/
+helper/site_display_names.py
+plot_*.py

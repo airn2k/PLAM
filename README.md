@@ -65,6 +65,87 @@ Model outputs are written to the `outputs/` directory within the selected site.
 
 ---
 
+## Diagnostic figures
+
+`plot_diagnostic_summary_figures.py` exports the combined monthly and annual
+predicted-versus-measured plot as both PNG and A4 landscape PDF. Add
+`--scatter-grayscale` to export a grayscale version in both formats.
+
+---
+
+## Protected-area results
+
+With the site outputs, reference measurements, diagnostic metric CSVs, and SAC
+and SPA shapefiles available locally, run:
+
+```bash
+python summarize_protected_area_results.py
+```
+
+The script uses the highest-numbered run for each site. It produces a LaTeX
+performance table, a deposition-summary CSV, and A4 PDF and PNG maps in
+`diagnostic_figures/` (or `--output-dir`). Deposition is averaged over the union
+of SAC and SPA polygons inside each model grid, with overlapping polygons
+counted once and partial cells approximated using an 8-by-8 subgrid. Monthly
+annualised deposition rates and concentration maps are weighted by simulated
+hours. The CSV records the contributing protected areas and the fraction of
+their union inside the grid. Site averages cover all available run intervals;
+these periods differ by site and may contain gaps.
+
+By default, the script slides a 12-calendar-month window through each monitoring
+site's latest run, finds the window with the highest duration-weighted
+protected-area mean deposition at each site, and maps the three highest sites.
+It writes all sites' peak windows and rates to
+`diagnostic_figures/protected_area_peak_window_ranking.csv`. Windows differ
+between sites and deliberately select high-deposition periods rather than
+typical years. All twelve monthly rasters are required, but simulations can
+still have gaps or partial months; panel titles show dates, and the ranking CSV
+reports simulated and window hours.
+Maps show the central 8 km by 8 km of each model grid, reprojected to Irish
+Transverse Mercator (EPSG:2157) with nearest-neighbour sampling. Site ranking
+and table deposition values still use the full protected-area portions within
+each original grid. Each map row uses a shared grayscale upper limit at the
+98th percentile pooled across its three displayed grids; threshold highlights
+use unclipped values.
+The additional grayscale map uses dots for concentration above 1
+and up to 3 µg/m³, and vertical stripes for concentration above 3 µg/m³ or
+deposition above 5 kg N/ha/year in bog SACs.
+Use `--map-sites SITE SITE SITE` to choose three sites or `--auto-map-sites`
+to select the highest measured means among sites with twelve outputs in
+`--year` (2024 by default); both alternatives use each site's selected
+diagnostic window instead. The concentration rasters represent the 0–3 m AGL
+layer, not 0–4 m.
+Concentration map highlights show values above 1 and 3 µg/m³; deposition values
+above 5 kg N/ha/year are highlighted within the mapped Clara, Killyconny, and
+Raheenmore bog SAC boundaries only. SAC boundaries are not habitat maps, and
+the deposition rasters represent modeled ammonia-derived nitrogen, not total
+nitrogen deposition. These visual references do not establish critical-load
+exceedance or compliance.
+
+For a separate three-panel Raheenmore map, run:
+
+```bash
+python plot_raheenmore_thresholds.py
+```
+
+It maps the site's highest-deposition 12-month window over the same central
+8 km square, with continuous grayscale concentration capped at the displayed
+grid's 98th percentile and white, grey and black categories. Concentration classes are
+≤1, >1–3 and >3 µg/m³; deposition classes are ≤1, >1–5 and >5 kg N/ha/year
+across the whole map. Deposition breakpoints are visual references, not proof
+of ecological critical-load exceedance; the modeled load is ammonia-derived
+nitrogen only.
+
+For the three highest-deposition sites in a 3-by-3 figure, run
+`python plot_peak_site_thresholds.py`. Rows show sites and columns show
+continuous concentration, concentration classes and deposition classes.
+The continuous scale uses the 98th percentile pooled across the three displayed
+grids; class boundaries use the unclipped values. The same deposition
+breakpoints apply across each whole map and are not site-specific critical
+loads.
+
+---
+
 ## Running a Simulation
 
 The primary execution script is `run_parallel.py`.

@@ -669,50 +669,8 @@ dem_zoomed = scipy.ndimage.zoom(
 dem_resized = dem_zoomed[::-1, :].T.copy()  # shape (nx, ny): [ix_east, iy_north]
 print(f"DEM resize (scipy.ndimage.zoom) time: {time.time() - t0:.2f} s")
 
-valid = (~np.ma.getmaskarray(dem_resized)) & np.isfinite(dem_resized)
-
-# Eight neighbouring cells; exclude the centre cell
-kernel = np.ones((3, 3), dtype=np.float64)
-kernel[1, 1] = 0
-
-# Calculate neighbourhood sums, excluding NoData cells
-z_valid = np.where(valid, dem_resized, 0)
-sum_z = convolve(z_valid, kernel, mode="constant", cval=0)
-sum_z2 = convolve(z_valid**2, kernel, mode="constant", cval=0)
-count = convolve(valid.astype(np.float64), kernel, mode="constant", cval=0)
-
-# Riley-style TRI: sqrt(sum((neighbour - centre)**2))
-tri_squared = sum_z2 - 2 * dem_resized * sum_z + count * dem_resized**2
-tri = np.sqrt(np.maximum(tri_squared, 0))
-
-# Exclude invalid centre cells and cells with no valid neighbours
-tri[~valid | (count == 0)] = np.nan
-
-#
-# 11 x 11 cells: approximately 1 km at 90 m resolution
-window = int(1000 / GRID_RES)
-
-# Handle NoData without treating it as a real elevation
-z_max_input = np.where(valid, dem_resized, -np.inf)
-z_min_input = np.where(valid, dem_resized, np.inf)
-
-local_max = scipy.ndimage.maximum_filter(
-    z_max_input, size=window, mode="constant", cval=-np.inf
-)
-local_min = scipy.ndimage.minimum_filter(
-    z_min_input, size=window, mode="constant", cval=np.inf
-)
-
-valid_count = (
-    scipy.ndimage.uniform_filter(
-        valid.astype(float), size=window, mode="constant", cval=0
-    )
-    * window**2
-)
-
-# Require at least 80% valid cells per window
-relief = local_max - local_min
-relief[~valid | (valid_count < 0.8 * window**2)] = np.nan
+# Smooth out the DEM 
+# dem_resized = scipy.signal.medfilt2d(dem_resized,3)
 
 # DEM metadata for kernel
 dem_nx = np.int32(nx)
@@ -729,15 +687,6 @@ dh_dx_grid = dh_dx_grid.astype(np.float32)
 dh_dy_grid = dh_dy_grid.astype(np.float32)
 slope = np.degrees(np.sqrt(dh_dx_grid**2 + dh_dy_grid**2))
 
-print("Mean local relief:", np.nanmean(relief), "m")
-print("Median local relief:", np.nanmedian(relief), "m")
-print("95th percentile:", np.nanpercentile(relief, 95), "m")
-print(
-    f"Max slope: {np.nanmax(slope):.4f}, Mean slope: {np.nanmean(slope):.4f}, Median slope: {np.nanmedian(slope):.4f}, Slope > 5 deg: {(np.nanmean(slope > 5))}, "
-    f"Slope > 15 deg: {(np.nanmean(slope > 15))}"
-)
-print(f"Mean TRI: {np.nanmean(tri):.3f}")
-print(f"Median TRI: {np.nanmedian(tri):.3f}")
 
 # if FLAT_SITE == 0:
 #     dem_resized *= (np.nanmedian(relief)*(-0.00875) + 1.128)
@@ -1305,7 +1254,7 @@ for global_step in range(total_steps):
         elif unique_seasonal_factor_n == 1 and seasonal_factor is not None:
             seasonal_factor_step = np.full(
                 (total_particles,),
-                seasonal_factor[current_season - 1],
+                seasonal_factor,
                 dtype=np.float16,
             )
         # Copy the seasonal factor for the current step to the device
