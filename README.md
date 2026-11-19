@@ -67,9 +67,93 @@ Model outputs are written to the `outputs/` directory within the selected site.
 
 ## Diagnostic figures
 
-`plot_diagnostic_summary_figures.py` exports the combined monthly and annual
-predicted-versus-measured plot as both PNG and A4 landscape PDF. Add
-`--scatter-grayscale` to export a grayscale version in both formats.
+`plot_diagnostic_summary_figures.py` exports one portrait 2:3 2-by-2
+scatter/residual figure,
+`diagnostic_scatter_residual_four_panel.png` and `.pdf`, with monthly scatter,
+annual scatter, monthly residual distribution, and monthly residuals versus
+measured concentration. The site legend is shared across panels; monthly,
+annual, and residual-scatter panels use the same style for each site. Add
+`--scatter-grayscale` to export a grayscale version in both formats, with up
+to 26 distinct filled or hollow marker styles. Monthly points include all
+selected months, while the annual panel includes only selected calendar years.
+Scatter summaries report normalized mean square error,
+$NMSE=\mathrm{mean}((P-O)^2)/(\bar P\bar O)$, geometric mean bias,
+$MG=\exp(\mathrm{mean}(\ln(P)-\ln(O)))$,
+and geometric variance, $VG=\exp(\mathrm{mean}((\ln(P)-\ln(O))^2))$. MG and VG
+are undefined if any paired concentration is non-positive.
+
+For the main-results subset, run:
+
+```bash
+python plot_diagnostic_summary_figures.py --eligible-years-only --monthly-all-sites --monthly-grayscale --monthly-single-page --scatter-grayscale --max-sites 20 --output-dir diagnostic_figures/all_sites_with_eligible_annual
+python create_eligible_descriptive_tables.py --all-monthly --output-dir diagnostic_figures/all_sites_with_eligible_annual
+python create_eligible_performance_table.py --all-monthly --output-dir diagnostic_figures/all_sites_with_eligible_annual
+```
+
+Monthly figures and monthly table statistics use all available paired months,
+including ineligible sites and years. Annual figures, annual performance table
+statistics, and the threshold-map deposition rankings use only calendar years with at least 75% paired
+measurement coverage and 75% simulation-hour coverage. The rule
+also excludes a year if any three consecutive calendar months within it each
+have no paired measurement coverage or no simulated hours. A month with any
+positive coverage of both is not missing; the rule does not cross New Year.
+The monthly paired coverage follows the diagnostic sampling-period intervals
+and does not independently verify every simulation hour within those intervals.
+The output directory includes an eligibility audit. Sites without a qualifying
+year are marked in the tables, with annual performance values shown as NA.
+The monthly and annual panels therefore cover different samples. These
+restrictions do not establish that excluded observations are biased. Run
+`python plot_peak_site_thresholds.py` first to refresh the eligible deposition
+ranking for the maps. The performance table instead reports 2025 deposition
+for sites with at least 90% simulated-hour coverage, without paired-data eligibility filtering.
+It averages annualised monthly rates by simulated hours over the SAC/SPA union
+within each grid; missing periods may bias the reported rate. The generator also writes
+`deposition_2025_summary.csv` with the hours and unrounded values, including
+below-threshold values excluded from the table.
+Habitat types in the site table are supplied by the project, with
+unspecified habitats shown as `--`;
+weather means cover complete calendar months having any paired data, including
+ineligible years. The all-monthly tables also include Valentia Island, used for
+baseline correction, as a separate observation-only site. Its monthly
+measurements come from `ref.xlsx` and are duration-weighted with overlaps
+averaged; its annual and model-performance/deposition values are NA because
+there is no simulation. Its weather averages use complete measurement months
+and are NA if weather is missing for any such month.
+Earlier eligible-only outputs are preserved in
+`diagnostic_figures/eligible_years/`; omit `--monthly-all-sites` to regenerate
+that subset. `--monthly-single-page` additionally exports a single A4 panel
+page for up to 16 sites, with common x and y scales; the larger paginated
+versions remain available.
+
+For a single page containing only monthly data from eligible years:
+
+```bash
+python plot_diagnostic_summary_figures.py --eligible-years-only --monthly-grayscale --monthly-single-page --max-sites 20 --output-dir diagnostic_figures/eligible_years
+```
+
+### Clara random-seed sensitivity
+
+Once at least two sensitivity runs are complete, remove or move any historical
+runs out of `sites/clara_rnd/outputs/` and run:
+
+```bash
+python rng_sensitivity.py
+```
+
+Every numbered run folder is included. Each must contain exactly one January
+2026 monthly sampler CSV and the same sampler timestamps as the other runs.
+The script uses the full January 2026 simulation period, aggregates each run's
+sampler values into hourly and daily means, and produces PDF, PNG and CSV
+outputs for both in
+`diagnostic_figures/clara_rng_sensitivity/`. The figures show the mean across
+runs, ±1 sample standard deviation, and the minimum and maximum of the
+per-run averages. Entirely missing hours and days with one or more missing
+hours are omitted, not interpolated; the CSVs record sample counts, runs,
+expected and missing hours. Partly sampled hours are not detected by this check, so
+inspect sample counts as well. The spread is run-to-run variability, not
+measurement error. A JSON manifest records the run folders and simulation
+period. Confirm separately that the runs use distinct seeds and identical
+forcing and configuration; the sampler CSVs do not establish this.
 
 ---
 
@@ -142,7 +226,22 @@ continuous concentration, concentration classes and deposition classes.
 The continuous scale uses the 98th percentile pooled across the three displayed
 grids; class boundaries use the unclipped values. The same deposition
 breakpoints apply across each whole map and are not site-specific critical
-loads.
+loads. The current runs' `agl_0_10m` rasters average whole 4 m cells around
+terrain: a 10 m target spans at least three cells, approximately 0–12 m AGL,
+with effective boundaries and cell count varying with terrain alignment. The
+script ranks each site's highest eligible calendar-year deposition across the
+SAC/SPA union within each original grid, weighting annualised monthly rates by
+simulated hours. An eligible year requires at least 75% paired measurement
+coverage (as in the annual performance metrics) and 75% simulation-hour
+coverage, and no three consecutive months with zero paired coverage or zero
+simulated hours within the year. It writes `diagnostic_figures/peak_site_threshold_ranking.csv`
+with both coverage fractions and an exclusions CSV.
+Bloom is excluded when no output run exists, and Valentia is background only.
+For Killarney July and August 2026, the user confirmed that rasters generated
+with duplicated weather rows are usable; the script verifies the duplication
+and counts identical hourly timestamps once when weighting those months. This
+assumption does not establish that duplicate forcing had no effect on the
+simulation.
 
 ---
 

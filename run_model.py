@@ -838,7 +838,7 @@ d_depo = cuda.to_device(depo_grid)
 d_mass_budget = cuda.to_device(np.zeros(5, dtype=np.float64))
 blocks = (n_part + threads - 1) // threads
 print(blocks)
-rng_states = create_xoroshiro128p_states(blocks * threads, seed=12345)
+rng_states = create_xoroshiro128p_states(blocks * threads, seed=6)
 
 # Pre-allocate persistent device conc3d buffer (zeroed each sample interval)
 d_conc3d = cuda.device_array((nx, ny, nz), dtype=np.float32)
@@ -1394,6 +1394,7 @@ for global_step in range(total_steps):
         seasonal_factor_step=d_seasonal_factor_step,
         receptor_conc_array=d_receptor_conc_array,
         receptor_locations=d_receptor_locations,
+        current_step=np.int32(global_step),
     )
 
     

@@ -45,3 +45,16 @@ complete_cycle
 maps/
 helper/site_display_names.py
 plot_*.py
+create_eligible_descriptive_tables.py
+create_eligible_performance_table.py
+protected_map_data.py
+rng_sensitivity.py
+tests/test_combined_scatter_layout.py
+tests/test_diagnostic_calendar_years.py
+tests/test_eligible_descriptive_tables.py
+tests/test_eligible_performance_table.py
+tests/test_monthly_single_page_layout.py
+tests/test_peak_site_threshold_layout.py
+tests/test_protected_map_data.py
+tests/test_results_eligibility.py
+tests/test_rng_sensitivity.py

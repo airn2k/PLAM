@@ -25,6 +25,7 @@ def update_grid_3d_kernel(
     seasonal_factor_step,
     receptor_conc_array,
     receptor_locations,
+    current_step,
 ):
     j = cuda.blockIdx.x
     k = cuda.threadIdx.x + cuda.blockDim.x * cuda.blockIdx.y
@@ -52,4 +53,4 @@ def update_grid_3d_kernel(
             for r_idx in range(receptor_conc_array.shape[1]):
                 rx, ry, rz = receptor_locations[r_idx]
                 if ix == rx and iy == ry and iz == rz:
-                    cuda.atomic.add(receptor_conc_array, (step, r_idx), val)
+                    cuda.atomic.add(receptor_conc_array, (current_step, r_idx), val)

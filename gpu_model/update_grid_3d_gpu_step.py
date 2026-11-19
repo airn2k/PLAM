@@ -27,6 +27,7 @@ def update_grid_3d_gpu_step(
     seasonal_factor_step=None,
     receptor_conc_array=None,
     receptor_locations=None,
+    current_step=None,
 ):
     n_part = d_x.shape[1]
     if step < 0 or n_part <= 0:
@@ -56,4 +57,5 @@ def update_grid_3d_gpu_step(
         seasonal_factor_step,
         receptor_conc_array,
         receptor_locations,
+        current_step,
     )

@@ -324,7 +324,22 @@ Examples:
     for i, (chunk_name, chunk_start, chunk_end) in enumerate(chunks):
         days = (chunk_end - chunk_start).days
         if args.num_gpus > 0:
-            gpu_id = i % args.num_gpus
+            # Assign GPU to the least occupied one, based on VRAM occupation. Use NVIDIA-smi to check VRAM usage
+            import subprocess
+            gpu_loads = []
+            for gpu_id in range(args.num_gpus):
+                result = subprocess.run(
+                    ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits", "-i", str(gpu_id)],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                if result.returncode == 0:
+                    gpu_loads.append(int(result.stdout.strip()))
+                else:
+                    gpu_loads.append(float('inf'))
+            gpu_id = gpu_loads.index(min(gpu_loads))
+            
             print(
                 f"{chunk_name}: {chunk_start.strftime('%Y-%m-%d')} to {chunk_end.strftime('%Y-%m-%d')} ({days} days) [GPU {gpu_id}]"
             )
